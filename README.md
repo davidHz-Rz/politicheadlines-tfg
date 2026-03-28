@@ -1,22 +1,15 @@
-\# PoliticHeadlinES 2026
+# PoliticHeadlinES - TFG
 
+Sistema automático para el ranking de titulares en noticias políticas.
 
+## Estado actual
+- Baseline TF-IDF implementado
+- Integración multimodal con CLIP
+- Evaluación con métrica PA-nDCG@K
+- GPU (CUDA) habilitada
 
-Proyecto base para la competición PoliticHeadlinES y desarrollo del TFG.
-
-
-
-\## Requisitos
-
-\- Python 3.11
-
-
-
-\## Instalación
-
-
+## Ejecución
 
 ```bash
-
-pip install -r requirements.txt
+python src/run_baseline.py
 
