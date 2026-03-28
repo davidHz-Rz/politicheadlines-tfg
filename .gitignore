@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Environments
+.env
+.venv/
+venv/
+env/
+ENV/
+.conda/
+conda-meta/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code / IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs
+outputs/
+*.log
+*.tmp
+
+# Hugging Face / model cache
+.cache/
+huggingface/
+
+# Data
+data/
+
+# Legacy / notebook exports
+politicheadlines_2026_baseline.py
