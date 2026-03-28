@@ -16,6 +16,7 @@ from data_utils import validate_columns
 from metrics import score_submission
 from models.clip_ranker import load_clip, predict_task2_clip_plus_tfidf
 from models.tfidf_ranker import predict_tfidf
+from models.semantic_ranker import predict_semantic
 from submission import build_submission, save_submission, validate_submission
 
 
@@ -31,11 +32,10 @@ def main() -> None:
     print(f"Dev/Test rows: {len(test_df)}")
 
     # ---------------------------------------------------------
-    # Task 1: TF-IDF
+    # Task 1:
     # ---------------------------------------------------------
-    print("Generando predicciones para Task 1 (TF-IDF)...")
-    task_1_preds = predict_tfidf(
-        df_train=train_df,
+    print("Generando predicciones para Task 1 (Semantic Ranker)...")
+    task_1_preds = predict_semantic(
         df_pred=test_df,
     )
 
