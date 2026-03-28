@@ -19,6 +19,7 @@ DEFAULT_MODEL_NAME = "dccuchile/bert-base-spanish-wwm-cased"
 DEFAULT_MAX_LENGTH = 512
 
 
+
 def get_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -221,3 +222,16 @@ class CrossEncoderRanker:
                 print(f"Predichas {idx}/{len(df_pred)} filas...")
 
         return preds
+    
+    def save(self, output_dir: str) -> None:
+        self.model.save_pretrained(output_dir)
+        self.tokenizer.save_pretrained(output_dir)
+    
+    @classmethod
+    def load(cls, model_dir: str, config: CrossEncoderConfig):
+        instance = cls.__new__(cls)
+        instance.config = config
+        instance.device = get_device()
+        instance.tokenizer = AutoTokenizer.from_pretrained(model_dir)
+        instance.model = AutoModelForSequenceClassification.from_pretrained(model_dir).to(instance.device)
+        return instance

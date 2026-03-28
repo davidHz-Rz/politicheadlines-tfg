@@ -25,6 +25,7 @@ from submission import build_submission, save_submission, validate_submission
 CROSS_ENCODER_OUTPUT = OUTPUTS_DIR / "cross_encoder_results.csv"
 CROSS_ENCODER_METRICS = OUTPUTS_DIR / "cross_encoder_results.metrics.json"
 
+MODEL_OUTPUT_DIR = OUTPUTS_DIR / "cross_encoder_model"
 
 def main() -> None:
     print("Cargando datos...")
@@ -65,6 +66,8 @@ def main() -> None:
 
     print("Entrenando modelo...")
     ranker.fit(train_examples=train_examples, val_examples=dev_examples)
+    print("Guardando modelo...")
+    ranker.save(str(MODEL_OUTPUT_DIR))
 
     print("Generando predicciones en dev...")
     task_1_preds = ranker.predict_dataframe(dev_df)

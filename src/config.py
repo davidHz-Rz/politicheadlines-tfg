@@ -15,7 +15,7 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 # Opciones:
 # - "development_phase_initial"
 # - "train_corpora"
-ACTIVE_DATASET = "development_phase_initial"
+ACTIVE_DATASET = "train_corpora"
 
 DATASET_DIR = DATA_DIR / ACTIVE_DATASET
 INPUTS_DIR = DATA_DIR / "input_data"
