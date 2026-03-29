@@ -17,6 +17,7 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 # - "train_corpora"
 ACTIVE_DATASET = "train_corpora"
 
+
 DATASET_DIR = DATA_DIR / ACTIVE_DATASET
 INPUTS_DIR = DATA_DIR / "input_data"
 

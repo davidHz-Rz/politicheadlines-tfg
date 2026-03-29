@@ -58,6 +58,7 @@ def main() -> None:
         epochs=2,
         weight_decay=0.01,
         warmup_ratio=0.1,
+        use_amp=True,
     )
 
     print("Inicializando modelo...")

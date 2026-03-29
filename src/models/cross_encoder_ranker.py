@@ -87,6 +87,7 @@ class CrossEncoderConfig:
     epochs: int = 2
     weight_decay: float = 0.01
     warmup_ratio: float = 0.1
+    use_amp: bool = True
 
 
 class CrossEncoderRanker:
@@ -122,50 +123,59 @@ class CrossEncoderRanker:
         val_examples: List[Tuple[str, str, int]] | None = None,
     ) -> None:
         train_loader = self._make_loader(train_examples, shuffle=True)
-
+    
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay,
         )
-
+    
         total_steps = len(train_loader) * self.config.epochs
         warmup_steps = int(total_steps * self.config.warmup_ratio)
-
+    
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps,
         )
-
+    
         self.model.train()
-
+    
+        scaler = torch.cuda.amp.GradScaler(
+            enabled=self.config.use_amp and self.device == "cuda"
+        )
+    
         for epoch in range(self.config.epochs):
             total_loss = 0.0
-
+    
             for batch_idx, batch in enumerate(train_loader, start=1):
                 batch = {k: v.to(self.device) for k, v in batch.items()}
-
-                outputs = self.model(**batch)
-                loss = outputs.loss
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+    
+                optimizer.zero_grad(set_to_none=True)
+    
+                with torch.cuda.amp.autocast(
+                    enabled=self.config.use_amp and self.device == "cuda"
+                ):
+                    outputs = self.model(**batch)
+                    loss = outputs.loss
+    
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
-
+    
                 total_loss += loss.item()
-
+    
                 if batch_idx % 50 == 0:
                     print(
                         f"Epoch {epoch + 1}/{self.config.epochs} | "
                         f"Batch {batch_idx}/{len(train_loader)} | "
                         f"Loss: {loss.item():.4f}"
                     )
-
+    
             avg_loss = total_loss / max(len(train_loader), 1)
             print(f"Epoch {epoch + 1} finished | avg train loss = {avg_loss:.4f}")
-
+    
             if val_examples is not None:
                 val_loss = self.evaluate_loss(val_examples)
                 print(f"Epoch {epoch + 1} | val loss = {val_loss:.4f}")
