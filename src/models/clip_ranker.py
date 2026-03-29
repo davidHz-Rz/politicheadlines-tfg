@@ -184,3 +184,55 @@ def predict_task2_clip_plus_tfidf(
         print(f"[WARN] Missing images for {missing_images} rows. Used text-only fallback.")
 
     return preds
+
+
+def predict_task2_crossencoder_plus_clip(
+    df_pred: pd.DataFrame,
+    images_dir: Path,
+    cross_encoder_ranker,
+    clip_model: CLIPModel,
+    clip_processor: CLIPProcessor,
+    device: str,
+    w_text: float = 0.90,
+    w_img: float = 0.10,
+) -> List[str]:
+    preds = []
+    missing_images = 0
+
+    for _, row in df_pred.iterrows():
+        article = str(row.get("article_body", "") or "")
+        titles = get_titles(row)
+
+        # --- Text scores from cross-encoder ---
+        text_scores = cross_encoder_ranker.score_titles(article, titles)
+
+        # --- Image scores from CLIP ---
+        img_path = find_image_path(images_dir, row.get("image_hash", ""))
+        if img_path is None:
+            missing_images += 1
+            order = np.argsort(-text_scores)
+            preds.append(" ".join([TOKENS_ALL[i] for i in order]))
+            continue
+
+        img_scores = clip_logits_image_vs_titles(
+            clip_model=clip_model,
+            clip_processor=clip_processor,
+            device=device,
+            image_path=img_path,
+            titles=titles,
+        )
+
+        # Normalize per row
+        text01 = minmax_01(text_scores)
+        img01 = minmax_01(img_scores)
+
+        # Weighted fusion
+        final_scores = (w_text * text01) + (w_img * img01)
+
+        order = np.argsort(-final_scores)
+        preds.append(" ".join([TOKENS_ALL[i] for i in order]))
+
+    if missing_images:
+        print(f"[WARN] Missing images for {missing_images} rows. Used text-only fallback.")
+
+    return preds
