@@ -38,3 +38,6 @@ data/
 
 # Legacy / notebook exports
 politicheadlines_2026_baseline.py
+
+# Submission files
+submissions/
