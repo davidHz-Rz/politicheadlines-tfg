@@ -39,10 +39,7 @@ def validate_submission(submission: pd.DataFrame) -> None:
         raise ValueError("La columna 'task_2' contiene valores nulos.")
 
 
-def save_submission(
-    submission: pd.DataFrame,
-    output_path: Path = OUTPUT_SUBMISSION,
-) -> None:
+def save_submission(submission: pd.DataFrame, output_path: Path,) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     submission.to_csv(output_path, index=False)
     print(f"Submission guardada en: {output_path}")

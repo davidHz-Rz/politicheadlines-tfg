@@ -4,8 +4,17 @@ from typing import List, Tuple
 
 import pandas as pd
 
-from data_utils import get_source_text_task1, get_titles
-from metrics import parse_rank_list
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_DIR = PROJECT_ROOT / "src"
+
+if str(SRC_DIR) not in sys.path:
+        sys.path.append(str(SRC_DIR))
+
+from utils.data_utils import get_source_text_task1, get_titles
+from utils.metrics import parse_rank_list
 
 
 def build_pairs(df: pd.DataFrame, y_true_col: str = "y_true") -> List[Tuple[str, str, int]]:

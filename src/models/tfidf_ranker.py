@@ -1,4 +1,4 @@
-#from __future__ import annotations
+from __future__ import annotations
 
 from typing import List
 
@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from config import TITLE_COLS, TOKENS_ALL
-from data_utils import get_source_text_task1, get_titles
+from utils.data_utils import get_source_text_task1, get_titles
 
 
 class TfidfRanker:

@@ -7,7 +7,7 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 
 from config import TOKENS_ALL
-from data_utils import get_source_text_task1, get_titles
+from utils.data_utils import get_source_text_task1, get_titles
 
 
 DEFAULT_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"

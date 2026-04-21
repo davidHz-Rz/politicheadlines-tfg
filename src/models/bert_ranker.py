@@ -10,9 +10,10 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from transformers.optimization import get_linear_schedule_with_warmup
 
+
 from config import TOKENS_ALL
-from data_utils import get_source_text_task1, get_titles
-from metrics import parse_rank_list
+from utils.data_utils import get_source_text_task1, get_titles
+from utils.metrics import parse_rank_list
 
 
 DEFAULT_MODEL_NAME = "dccuchile/bert-base-spanish-wwm-cased"
@@ -141,7 +142,8 @@ class CrossEncoderRanker:
     
         self.model.train()
     
-        scaler = torch.cuda.amp.GradScaler(
+        scaler = torch.amp.GradScaler(
+            "cuda",
             enabled=self.config.use_amp and self.device == "cuda"
         )
     
@@ -153,7 +155,8 @@ class CrossEncoderRanker:
     
                 optimizer.zero_grad(set_to_none=True)
     
-                with torch.cuda.amp.autocast(
+                with torch.amp.autocast(
+                    "cuda",
                     enabled=self.config.use_amp and self.device == "cuda"
                 ):
                     outputs = self.model(**batch)
