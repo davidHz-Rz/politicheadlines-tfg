@@ -16,7 +16,7 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 # - "development_phase_initial"
 # - "train_corpora"
 # - "test_public"
-ACTIVE_DATASET = "development_phase_initial"
+ACTIVE_DATASET = "test_public"
 
 DATASET_DIR = DATA_DIR / ACTIVE_DATASET
 
@@ -88,7 +88,7 @@ CROSS_ENCODER_CONFIGS = {
     "mdeberta": {
         "model_name": "microsoft/mdeberta-v3-base",
         "model_dir": MDEBERTA_MODEL_DIR,
-        "max_length": 512,
+        "max_length": 384,
         "batch_size": 4,
         "learning_rate": 2e-5,
         "epochs": 2,

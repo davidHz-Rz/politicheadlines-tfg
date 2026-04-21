@@ -56,34 +56,19 @@ def build_pair_examples(df: pd.DataFrame, y_true_col: str = "y_true") -> List[Tu
 
 
 class PairDataset(Dataset):
-    def __init__(
-        self,
-        examples: List[Tuple[str, str, int]],
-        tokenizer,
-        max_length: int = DEFAULT_MAX_LENGTH,
-    ):
+    def __init__(self, examples: List[Tuple[str, str, int]]):
         self.examples = examples
-        self.tokenizer = tokenizer
-        self.max_length = max_length
 
     def __len__(self) -> int:
         return len(self.examples)
 
     def __getitem__(self, idx: int):
         article, title, label = self.examples[idx]
-
-        enc = self.tokenizer(
-            article,
-            title,
-            truncation=True,
-            max_length=self.max_length,
-            padding="max_length",
-            return_tensors="pt",
-        )
-
-        item = {k: v.squeeze(0) for k, v in enc.items()}
-        item["labels"] = torch.tensor(label, dtype=torch.long)
-        return item
+        return {
+            "article": article,
+            "title": title,
+            "labels": label,
+        }
 
 
 @dataclass
@@ -104,6 +89,11 @@ class CrossEncoderRanker:
         self.device = get_device()
         self.training_history: List[dict] = []
 
+        if self.device == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+
         tokenizer_kwargs = {}
         if _should_use_slow_tokenizer(config.model_name):
             tokenizer_kwargs["use_fast"] = False
@@ -116,20 +106,41 @@ class CrossEncoderRanker:
         self.model = self.model.float()
         self.model = self.model.to(self.device)
 
+    def _collate_fn(self, batch):
+        articles = [item["article"] for item in batch]
+        titles = [item["title"] for item in batch]
+        labels = torch.tensor([item["labels"] for item in batch], dtype=torch.long)
+
+        enc = self.tokenizer(
+            articles,
+            titles,
+            truncation=True,
+            max_length=self.config.max_length,
+            padding=True,
+            return_tensors="pt",
+        )
+
+        enc["labels"] = labels
+        return enc
+
     def _make_loader(
         self,
         examples: List[Tuple[str, str, int]],
         shuffle: bool = False,
     ) -> DataLoader:
-        dataset = PairDataset(
-            examples=examples,
-            tokenizer=self.tokenizer,
-            max_length=self.config.max_length,
-        )
+        dataset = PairDataset(examples=examples)
+
+        use_cuda_loader = self.device == "cuda"
+        num_workers = 2 if use_cuda_loader else 0
+
         return DataLoader(
             dataset,
             batch_size=self.config.batch_size,
             shuffle=shuffle,
+            collate_fn=self._collate_fn,
+            num_workers=num_workers,
+            pin_memory=use_cuda_loader,
+            persistent_workers=(use_cuda_loader and num_workers > 0),
         )
 
     def fit(
@@ -195,11 +206,15 @@ class CrossEncoderRanker:
             total_loss = 0.0
 
             for batch_idx, batch in enumerate(train_loader, start=1):
-                batch = {k: v.to(self.device) for k, v in batch.items()}
+                batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
                 optimizer.zero_grad(set_to_none=True)
 
                 if use_amp:
-                    with torch.amp.autocast("cuda", enabled=True):
+                    with torch.amp.autocast(
+                        device_type="cuda",
+                        dtype=torch.float16,
+                        enabled=True,
+                    ):
                         outputs = self.model(**batch)
                         loss = outputs.loss
                 else:
@@ -287,11 +302,23 @@ class CrossEncoderRanker:
         loader = self._make_loader(examples, shuffle=False)
         self.model.eval()
 
+        use_amp = self.config.use_amp and self.device == "cuda"
+
         total_loss = 0.0
         with torch.no_grad():
             for batch in loader:
-                batch = {k: v.to(self.device) for k, v in batch.items()}
-                outputs = self.model(**batch)
+                batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+
+                if use_amp:
+                    with torch.amp.autocast(
+                        device_type="cuda",
+                        dtype=torch.float16,
+                        enabled=True,
+                    ):
+                        outputs = self.model(**batch)
+                else:
+                    outputs = self.model(**batch)
+
                 total_loss += outputs.loss.item()
 
         self.model.train()
@@ -299,6 +326,8 @@ class CrossEncoderRanker:
 
     def score_titles(self, article: str, titles: List[str]) -> np.ndarray:
         self.model.eval()
+        use_amp = self.config.use_amp and self.device == "cuda"
+
         with torch.no_grad():
             articles = [article] * len(titles)
             enc = self.tokenizer(
@@ -306,12 +335,23 @@ class CrossEncoderRanker:
                 titles,
                 truncation=True,
                 max_length=self.config.max_length,
-                padding="max_length",
+                padding=True,
                 return_tensors="pt",
             )
-            enc = {k: v.to(self.device) for k, v in enc.items()}
-            logits = self.model(**enc).logits
+            enc = {k: v.to(self.device, non_blocking=True) for k, v in enc.items()}
+
+            if use_amp:
+                with torch.amp.autocast(
+                    device_type="cuda",
+                    dtype=torch.float16,
+                    enabled=True,
+                ):
+                    logits = self.model(**enc).logits
+            else:
+                logits = self.model(**enc).logits
+
             positive_scores = logits[:, 1].detach().float().cpu().numpy()
+
         return positive_scores.astype(float)
 
     def rank_titles(self, article: str, titles: List[str]) -> List[str]:
@@ -346,6 +386,11 @@ class CrossEncoderRanker:
         instance.config = config
         instance.device = get_device()
         instance.training_history = []
+
+        if instance.device == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
 
         tokenizer_kwargs = {}
         if _should_use_slow_tokenizer(model_dir) or _should_use_slow_tokenizer(config.model_name):
