@@ -47,6 +47,8 @@ def clip_logits_image_vs_titles(
         images=image,
         return_tensors="pt",
         padding=True,
+        truncation=True,
+        max_length=77,
     ).to(device)
 
     outputs = clip_model(**inputs)

@@ -6,7 +6,7 @@ import pandas as pd
 
 from config import (
     ALPHA,
-    DEV_CSV,
+    TEST_CSV,
     IMAGES_DIR,
     NDCG_K,
     OUTPUT_METRICS,
@@ -23,7 +23,7 @@ from submission import build_submission, save_submission, validate_submission
 def main() -> None:
     print("Cargando datos...")
     train_df = pd.read_csv(TRAIN_CSV)
-    test_df = pd.read_csv(DEV_CSV)
+    test_df = pd.read_csv(TEST_CSV)
 
     validate_columns(train_df)
     validate_columns(test_df)
@@ -77,7 +77,7 @@ def main() -> None:
     if "y_true" in test_df.columns:
         print("Evaluando submission...")
         scores = score_submission(
-            validation_csv=str(DEV_CSV),
+            validation_csv=str(TEST_CSV),
             results_csv="outputs/results.csv",
             k=NDCG_K,
             alpha=ALPHA,

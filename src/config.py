@@ -15,7 +15,8 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 # Opciones:
 # - "development_phase_initial"
 # - "train_corpora"
-ACTIVE_DATASET = "train_corpora"
+# - "test_public"
+ACTIVE_DATASET = "test_public"
 
 
 DATASET_DIR = DATA_DIR / ACTIVE_DATASET
@@ -26,7 +27,7 @@ INPUTS_DIR = DATA_DIR / "input_data"
 # ============================================================
 
 TRAIN_CSV = DATASET_DIR / "train_public.csv"
-DEV_CSV = DATASET_DIR / "dev_public.csv"
+TEST_CSV = DATASET_DIR / "test_public.csv" # dev_public / test_public
 IMAGES_DIR = DATASET_DIR / "images"
 
 OUTPUT_SUBMISSION = OUTPUTS_DIR / "results.csv"
@@ -78,6 +79,6 @@ def print_config() -> None:
     print("ACTIVE_DATASET:", ACTIVE_DATASET)
     print("DATASET_DIR:", DATASET_DIR)
     print("TRAIN_CSV:", TRAIN_CSV)
-    print("DEV_CSV:", DEV_CSV)
+    print("TEST_CSV:", TEST_CSV)
     print("IMAGES_DIR:", IMAGES_DIR)
     print("OUTPUT_SUBMISSION:", OUTPUT_SUBMISSION)

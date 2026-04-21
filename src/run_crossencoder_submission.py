@@ -6,7 +6,7 @@ import pandas as pd
 
 from config import (
     ALPHA,
-    DEV_CSV,
+    TEST_CSV,
     IMAGES_DIR,
     NDCG_K,
     OUTPUTS_DIR,
@@ -27,7 +27,7 @@ OUTPUT_METRICS = OUTPUTS_DIR / "crossencoder_submission.metrics.json"
 def main() -> None:
     print("Cargando datos...")
     train_df = pd.read_csv(TRAIN_CSV)
-    dev_df = pd.read_csv(DEV_CSV)
+    dev_df = pd.read_csv(TEST_CSV)
 
     validate_columns(train_df)
     validate_columns(dev_df)
@@ -83,7 +83,7 @@ def main() -> None:
     if "y_true" in dev_df.columns:
         print("Evaluando submission...")
         scores = score_submission(
-            validation_csv=str(DEV_CSV),
+            validation_csv=str(TEST_CSV),
             results_csv=str(OUTPUT_SUBMISSION),
             k=NDCG_K,
             alpha=ALPHA,
