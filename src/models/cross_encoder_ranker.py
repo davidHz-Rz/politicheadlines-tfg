@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
@@ -10,26 +12,31 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from transformers.optimization import get_linear_schedule_with_warmup
 
-
-from config import TOKENS_ALL
+from config import FORCE_CPU, TOKENS_ALL
 from utils.data_utils import get_source_text_task1, get_titles
-from utils.metrics import parse_rank_list
+from utils.metrics import parse_rank_list, score_task1_predictions_df
 
 
 DEFAULT_MODEL_NAME = "dccuchile/bert-base-spanish-wwm-cased"
 DEFAULT_MAX_LENGTH = 512
 
 
-
 def get_device() -> str:
+    if FORCE_CPU:
+        return "cpu"
     return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _should_use_slow_tokenizer(model_name_or_path: str) -> bool:
+    name = model_name_or_path.lower()
+    return "deberta" in name
 
 
 def extract_positive_index(row: pd.Series, y_true_col: str = "y_true") -> int:
     y_true_tokens = parse_rank_list(row[y_true_col])
     if not y_true_tokens:
         raise ValueError("Fila sin y_true válido.")
-    top_token = y_true_tokens[0]  # p.ej. t9
+    top_token = y_true_tokens[0]
     return int(top_token[1:]) - 1
 
 
@@ -95,12 +102,19 @@ class CrossEncoderRanker:
     def __init__(self, config: CrossEncoderConfig):
         self.config = config
         self.device = get_device()
+        self.training_history: List[dict] = []
 
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+        tokenizer_kwargs = {}
+        if _should_use_slow_tokenizer(config.model_name):
+            tokenizer_kwargs["use_fast"] = False
+
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model_name, **tokenizer_kwargs)
         self.model = AutoModelForSequenceClassification.from_pretrained(
             config.model_name,
             num_labels=2,
-        ).to(self.device)
+        )
+        self.model = self.model.float()
+        self.model = self.model.to(self.device)
 
     def _make_loader(
         self,
@@ -122,66 +136,152 @@ class CrossEncoderRanker:
         self,
         train_examples: List[Tuple[str, str, int]],
         val_examples: List[Tuple[str, str, int]] | None = None,
+        val_df: pd.DataFrame | None = None,
+        output_dir: str | Path | None = None,
     ) -> None:
         train_loader = self._make_loader(train_examples, shuffle=True)
-    
+
+        no_decay = ["bias", "LayerNorm.weight", "LayerNorm.bias", "layer_norm.weight", "layer_norm.bias"]
+
+        optimizer_grouped_parameters = [
+            {
+                "params": [
+                    p for n, p in self.model.named_parameters()
+                    if p.requires_grad and not any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": self.config.weight_decay,
+            },
+            {
+                "params": [
+                    p for n, p in self.model.named_parameters()
+                    if p.requires_grad and any(nd in n for nd in no_decay)
+                ],
+                "weight_decay": 0.0,
+            },
+        ]
+
         optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+            optimizer_grouped_parameters,
             lr=self.config.learning_rate,
-            weight_decay=self.config.weight_decay,
+            eps=1e-6,
+            betas=(0.9, 0.999),
         )
-    
+
         total_steps = len(train_loader) * self.config.epochs
         warmup_steps = int(total_steps * self.config.warmup_ratio)
-    
+
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps,
         )
-    
+
+        use_amp = self.config.use_amp and self.device == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+
+        save_root = Path(output_dir) if output_dir is not None else None
+        if save_root is not None:
+            save_root.mkdir(parents=True, exist_ok=True)
+
+        best_score = float("-inf")
+        best_epoch = None
+
         self.model.train()
-    
-        scaler = torch.amp.GradScaler(
-            "cuda",
-            enabled=self.config.use_amp and self.device == "cuda"
-        )
-    
+        print(f"Dispositivo: {self.device}")
+        print(f"AMP activado: {use_amp}")
+        print("Model dtype:", next(self.model.parameters()).dtype)
+
         for epoch in range(self.config.epochs):
             total_loss = 0.0
-    
+
             for batch_idx, batch in enumerate(train_loader, start=1):
                 batch = {k: v.to(self.device) for k, v in batch.items()}
-    
                 optimizer.zero_grad(set_to_none=True)
-    
-                with torch.amp.autocast(
-                    "cuda",
-                    enabled=self.config.use_amp and self.device == "cuda"
-                ):
+
+                if use_amp:
+                    with torch.amp.autocast("cuda", enabled=True):
+                        outputs = self.model(**batch)
+                        loss = outputs.loss
+                else:
                     outputs = self.model(**batch)
                     loss = outputs.loss
-    
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+
+                if not torch.isfinite(loss):
+                    raise ValueError(
+                        f"Loss no finita detectada en epoch {epoch + 1}, batch {batch_idx}: {loss.item()}"
+                    )
+
+                if use_amp:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                else:
+                    loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
+
+                if use_amp:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+
                 scheduler.step()
-    
                 total_loss += loss.item()
-    
-                if batch_idx % 50 == 0:
+
+                if batch_idx % 10 == 0 or batch_idx == len(train_loader):
                     print(
                         f"Epoch {epoch + 1}/{self.config.epochs} | "
                         f"Batch {batch_idx}/{len(train_loader)} | "
                         f"Loss: {loss.item():.4f}"
                     )
-    
+
             avg_loss = total_loss / max(len(train_loader), 1)
+            history_entry = {
+                "epoch": epoch + 1,
+                "train_loss": avg_loss,
+            }
             print(f"Epoch {epoch + 1} finished | avg train loss = {avg_loss:.4f}")
-    
+
             if val_examples is not None:
                 val_loss = self.evaluate_loss(val_examples)
+                history_entry["val_loss"] = val_loss
                 print(f"Epoch {epoch + 1} | val loss = {val_loss:.4f}")
+
+            if val_df is not None and "y_true" in val_df.columns:
+                metrics = self.evaluate_ranking_dataframe(val_df)
+                history_entry.update(metrics)
+                print(
+                    f"Epoch {epoch + 1} | "
+                    f"task_1_pa_ndcg = {metrics['task_1_pa_ndcg']:.6f} | "
+                    f"top1_acc = {metrics['top1_acc']:.6f}"
+                )
+
+                if metrics["task_1_pa_ndcg"] > best_score:
+                    best_score = metrics["task_1_pa_ndcg"]
+                    best_epoch = epoch + 1
+                    if save_root is not None:
+                        self.save(str(save_root))
+                        print(f"Nuevo mejor checkpoint guardado en: {save_root}")
+
+            self.training_history.append(history_entry)
+            if save_root is not None:
+                self._save_training_history(save_root, best_epoch=best_epoch, best_score=best_score)
+
+        if save_root is not None:
+            last_dir = save_root / "last_checkpoint"
+            last_dir.mkdir(parents=True, exist_ok=True)
+            self.save(str(last_dir))
+            self._save_training_history(save_root, best_epoch=best_epoch, best_score=best_score)
+
+    def _save_training_history(self, output_dir: Path, best_epoch: int | None, best_score: float) -> None:
+        history_payload = {
+            "best_epoch": best_epoch,
+            "best_task_1_pa_ndcg": None if best_score == float("-inf") else best_score,
+            "history": self.training_history,
+        }
+        history_path = output_dir / "training_history.json"
+        with open(history_path, "w", encoding="utf-8") as f:
+            json.dump(history_payload, f, indent=2, ensure_ascii=False)
 
     def evaluate_loss(self, examples: List[Tuple[str, str, int]]) -> float:
         loader = self._make_loader(examples, shuffle=False)
@@ -199,24 +299,20 @@ class CrossEncoderRanker:
 
     def score_titles(self, article: str, titles: List[str]) -> np.ndarray:
         self.model.eval()
-
-        scores = []
         with torch.no_grad():
-            for title in titles:
-                enc = self.tokenizer(
-                    article,
-                    title,
-                    truncation=True,
-                    max_length=self.config.max_length,
-                    padding="max_length",
-                    return_tensors="pt",
-                )
-                enc = {k: v.to(self.device) for k, v in enc.items()}
-                logits = self.model(**enc).logits
-                positive_score = logits[0, 1].item()
-                scores.append(positive_score)
-
-        return np.array(scores, dtype=float)
+            articles = [article] * len(titles)
+            enc = self.tokenizer(
+                articles,
+                titles,
+                truncation=True,
+                max_length=self.config.max_length,
+                padding="max_length",
+                return_tensors="pt",
+            )
+            enc = {k: v.to(self.device) for k, v in enc.items()}
+            logits = self.model(**enc).logits
+            positive_scores = logits[:, 1].detach().float().cpu().numpy()
+        return positive_scores.astype(float)
 
     def rank_titles(self, article: str, titles: List[str]) -> List[str]:
         scores = self.score_titles(article, titles)
@@ -235,16 +331,28 @@ class CrossEncoderRanker:
                 print(f"Predichas {idx}/{len(df_pred)} filas...")
 
         return preds
-    
+
+    def evaluate_ranking_dataframe(self, df_val: pd.DataFrame) -> dict:
+        preds = self.predict_dataframe(df_val)
+        return score_task1_predictions_df(df_val, preds)
+
     def save(self, output_dir: str) -> None:
         self.model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
-    
+
     @classmethod
     def load(cls, model_dir: str, config: CrossEncoderConfig):
         instance = cls.__new__(cls)
         instance.config = config
         instance.device = get_device()
-        instance.tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        instance.model = AutoModelForSequenceClassification.from_pretrained(model_dir).to(instance.device)
+        instance.training_history = []
+
+        tokenizer_kwargs = {}
+        if _should_use_slow_tokenizer(model_dir) or _should_use_slow_tokenizer(config.model_name):
+            tokenizer_kwargs["use_fast"] = False
+
+        instance.tokenizer = AutoTokenizer.from_pretrained(model_dir, **tokenizer_kwargs)
+        instance.model = AutoModelForSequenceClassification.from_pretrained(model_dir)
+        instance.model = instance.model.float()
+        instance.model = instance.model.to(instance.device)
         return instance

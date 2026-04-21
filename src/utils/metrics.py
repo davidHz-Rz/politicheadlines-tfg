@@ -191,3 +191,27 @@ def score_submission(
         "k": k,
         "alpha": alpha,
     }
+
+def score_task1_predictions_df(df_val: pd.DataFrame, task_1_preds: List[str], y_true_col: str = "y_true") -> Dict[str, float]:
+    if y_true_col not in df_val.columns:
+        raise ValueError(f"No se encontró la columna '{y_true_col}' para evaluar.")
+
+    if len(df_val) != len(task_1_preds):
+        raise ValueError("El número de predicciones no coincide con el número de filas del dataframe.")
+
+    scores: List[float] = []
+    top1_hits = 0
+
+    for (_, row), pred in zip(df_val.iterrows(), task_1_preds):
+        y_true = parse_rank_list(row[y_true_col])
+        pred_tokens = parse_rank_list(pred)
+        scores.append(pa_ndcg(pred_tokens, y_true, k=NDCG_K, alpha=ALPHA))
+
+        if pred_tokens and y_true and pred_tokens[0] == y_true[0]:
+            top1_hits += 1
+
+    n = max(len(task_1_preds), 1)
+    return {
+        "task_1_pa_ndcg": float(sum(scores) / n),
+        "top1_acc": float(top1_hits / n),
+    }

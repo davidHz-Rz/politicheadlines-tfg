@@ -5,9 +5,6 @@ from typing import Iterable
 
 import pandas as pd
 
-from config import OUTPUT_SUBMISSION
-
-
 def build_submission(
     ids: Iterable[str],
     task_1_preds: Iterable[str],

@@ -14,15 +14,6 @@ if str(SRC_DIR) not in sys.path:
 
 from config import (
     ALPHA,
-    BERT_BATCH_SIZE,
-    BERT_EPOCHS,
-    BERT_LEARNING_RATE,
-    BERT_MAX_LENGTH,
-    BERT_MODEL_DIR,
-    BERT_MODEL_NAME,
-    BERT_USE_AMP,
-    BERT_WARMUP_RATIO,
-    BERT_WEIGHT_DECAY,
     IMAGE_WEIGHT,
     IMAGES_DIR,
     MODEL_NAME,
@@ -33,6 +24,7 @@ from config import (
     TEXT_WEIGHT,
     TRAIN_CSV,
     USE_CLIP_FOR_TASK2,
+    get_cross_encoder_runtime_config,
 )
 from utils.data_utils import validate_columns
 from utils.metrics import score_submission
@@ -41,21 +33,22 @@ from utils.submission import build_submission, save_submission, validate_submiss
 from models.clip_ranker import load_clip, predict_task2_clip_plus_tfidf, predict_task2_semantic_plus_clip, predict_task2_crossencoder_plus_clip
 from models.tfidf_ranker import predict_tfidf
 from models.semantic_ranker import predict_semantic, SemanticRanker
-from models.bert_ranker import CrossEncoderConfig, CrossEncoderRanker
+from models.cross_encoder_ranker import CrossEncoderConfig, CrossEncoderRanker
 
 
-def build_bert_ranker() -> CrossEncoderRanker:
+def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
+    cfg = get_cross_encoder_runtime_config(model_key)
     config = CrossEncoderConfig(
-        model_name=BERT_MODEL_NAME,
-        max_length=BERT_MAX_LENGTH,
-        batch_size=BERT_BATCH_SIZE,
-        learning_rate=BERT_LEARNING_RATE,
-        epochs=BERT_EPOCHS,
-        weight_decay=BERT_WEIGHT_DECAY,
-        warmup_ratio=BERT_WARMUP_RATIO,
-        use_amp=BERT_USE_AMP,
+        model_name=cfg["model_name"],
+        max_length=cfg["max_length"],
+        batch_size=cfg["batch_size"],
+        learning_rate=cfg["learning_rate"],
+        epochs=cfg["epochs"],
+        weight_decay=cfg["weight_decay"],
+        warmup_ratio=cfg["warmup_ratio"],
+        use_amp=cfg["use_amp"],
     )
-    return CrossEncoderRanker.load(str(BERT_MODEL_DIR), config)
+    return CrossEncoderRanker.load(str(cfg["model_dir"]), config)
 
 
 def main() -> None:
@@ -94,10 +87,26 @@ def main() -> None:
 
     elif MODEL_NAME == "bert":
         print("Cargando BERT entrenado...")
-        ranker = build_bert_ranker()
+        ranker = build_crossencoder_ranker("bert")
         print(f"Dispositivo BERT: {ranker.device}")
 
         print("Generando predicciones para Task 1 (BERT)...")
+        task_1_preds = ranker.predict_dataframe(test_df)
+
+    elif MODEL_NAME == "bertin":
+        print("Cargando BERTIN entrenado...")
+        ranker = build_crossencoder_ranker("bertin")
+        print(f"Dispositivo BERTIN: {ranker.device}")
+
+        print("Generando predicciones para Task 1 (BERTIN)...")
+        task_1_preds = ranker.predict_dataframe(test_df)
+
+    elif MODEL_NAME == "mdeberta":
+        print("Cargando mDeBERTa entrenado...")
+        ranker = build_crossencoder_ranker("mdeberta")
+        print(f"Dispositivo mDeBERTa: {ranker.device}")
+
+        print("Generando predicciones para Task 1 (mDeBERTa)...")
         task_1_preds = ranker.predict_dataframe(test_df)
 
     else:
@@ -137,6 +146,32 @@ def main() -> None:
             
         elif MODEL_NAME == "bert":
             print("Generando predicciones para Task 2 (BERT + CLIP)...")
+            task_2_preds = predict_task2_crossencoder_plus_clip(
+                df_pred=test_df,
+                images_dir=IMAGES_DIR,
+                cross_encoder_ranker=ranker,
+                clip_model=clip_model,
+                clip_processor=clip_processor,
+                device=device,
+                w_text=TEXT_WEIGHT,
+                w_img=IMAGE_WEIGHT,
+            )
+
+        elif MODEL_NAME == "bertin":
+            print("Generando predicciones para Task 2 (BERTIN + CLIP)...")
+            task_2_preds = predict_task2_crossencoder_plus_clip(
+                df_pred=test_df,
+                images_dir=IMAGES_DIR,
+                cross_encoder_ranker=ranker,
+                clip_model=clip_model,
+                clip_processor=clip_processor,
+                device=device,
+                w_text=TEXT_WEIGHT,
+                w_img=IMAGE_WEIGHT,
+            )
+
+        elif MODEL_NAME == "mdeberta":
+            print("Generando predicciones para Task 2 (mDeBERTa + CLIP)...")
             task_2_preds = predict_task2_crossencoder_plus_clip(
                 df_pred=test_df,
                 images_dir=IMAGES_DIR,

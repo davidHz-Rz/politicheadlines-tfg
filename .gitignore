@@ -28,6 +28,10 @@ Thumbs.db
 outputs/
 *.log
 *.tmp
+*.zip
+*.safetensors
+*.pt
+*.bin
 
 # Hugging Face / model cache
 .cache/
@@ -41,3 +45,6 @@ politicheadlines_2026_baseline.py
 
 # Submission files
 submissions/
+
+# Experiments summary
+registro_de_experimentos.txt
