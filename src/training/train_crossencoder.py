@@ -42,6 +42,7 @@ def main(model_key: str | None = None) -> None:
         model_name=cfg["model_name"],
         max_length=cfg["max_length"],
         batch_size=cfg["batch_size"],
+        gradient_accumulation_steps=cfg.get("gradient_accumulation_steps", 1),
         learning_rate=cfg["learning_rate"],
         epochs=cfg["epochs"],
         weight_decay=cfg["weight_decay"],

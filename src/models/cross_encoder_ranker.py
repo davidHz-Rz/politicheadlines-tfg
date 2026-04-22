@@ -76,6 +76,7 @@ class CrossEncoderConfig:
     model_name: str = DEFAULT_MODEL_NAME
     max_length: int = 512
     batch_size: int = 4
+    gradient_accumulation_steps: int = 1
     learning_rate: float = 2e-5
     epochs: int = 2
     weight_decay: float = 0.01
@@ -178,7 +179,8 @@ class CrossEncoderRanker:
             betas=(0.9, 0.999),
         )
 
-        total_steps = len(train_loader) * self.config.epochs
+        updates_per_epoch = max(1, (len(train_loader) + self.config.gradient_accumulation_steps - 1) // self.config.gradient_accumulation_steps)
+        total_steps = updates_per_epoch * self.config.epochs
         warmup_steps = int(total_steps * self.config.warmup_ratio)
 
         scheduler = get_linear_schedule_with_warmup(
@@ -201,13 +203,15 @@ class CrossEncoderRanker:
         print(f"Dispositivo: {self.device}")
         print(f"AMP activado: {use_amp}")
         print("Model dtype:", next(self.model.parameters()).dtype)
+        print(f"Gradient accumulation steps: {self.config.gradient_accumulation_steps}")
+
+        optimizer.zero_grad(set_to_none=True)
 
         for epoch in range(self.config.epochs):
             total_loss = 0.0
 
             for batch_idx, batch in enumerate(train_loader, start=1):
                 batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
-                optimizer.zero_grad(set_to_none=True)
 
                 if use_amp:
                     with torch.amp.autocast(
@@ -226,22 +230,28 @@ class CrossEncoderRanker:
                         f"Loss no finita detectada en epoch {epoch + 1}, batch {batch_idx}: {loss.item()}"
                     )
 
-                if use_amp:
-                    scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
-                else:
-                    loss.backward()
-
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
-
-                if use_amp:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.step()
-
-                scheduler.step()
                 total_loss += loss.item()
+                loss_for_backward = loss / self.config.gradient_accumulation_steps
+
+                should_step = (batch_idx % self.config.gradient_accumulation_steps == 0) or (batch_idx == len(train_loader))
+
+                if use_amp:
+                    scaler.scale(loss_for_backward).backward()
+                    if should_step:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad(set_to_none=True)
+                else:
+                    loss_for_backward.backward()
+                    if should_step:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
+                        optimizer.step()
+                        optimizer.zero_grad(set_to_none=True)
+
+                if should_step:
+                    scheduler.step()
 
                 if batch_idx % 10 == 0 or batch_idx == len(train_loader):
                     print(

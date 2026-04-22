@@ -68,6 +68,7 @@ CROSS_ENCODER_CONFIGS = {
         "model_dir": BERT_MODEL_DIR,
         "max_length": 512,
         "batch_size": 4,
+        "gradient_accumulation_steps": 1,
         "learning_rate": 2e-5,
         "epochs": 2,
         "weight_decay": 0.01,
@@ -78,7 +79,8 @@ CROSS_ENCODER_CONFIGS = {
         "model_name": "bertin-project/bertin-roberta-base-spanish",
         "model_dir": BERTIN_MODEL_DIR,
         "max_length": 512,
-        "batch_size": 4,
+        "batch_size": 16,
+        "gradient_accumulation_steps": 1,
         "learning_rate": 2e-5,
         "epochs": 2,
         "weight_decay": 0.01,
@@ -88,10 +90,11 @@ CROSS_ENCODER_CONFIGS = {
     "mdeberta": {
         "model_name": "microsoft/mdeberta-v3-base",
         "model_dir": MDEBERTA_MODEL_DIR,
-        "max_length": 384,
+        "max_length": 192,
         "batch_size": 4,
+        "gradient_accumulation_steps": 1,
         "learning_rate": 2e-5,
-        "epochs": 2,
+        "epochs": 1,
         "weight_decay": 0.01,
         "warmup_ratio": 0.1,
         "use_amp": True,
@@ -102,6 +105,7 @@ CROSS_ENCODER_CONFIGS = {
 BERT_MODEL_NAME = CROSS_ENCODER_CONFIGS["bert"]["model_name"]
 BERT_MAX_LENGTH = CROSS_ENCODER_CONFIGS["bert"]["max_length"]
 BERT_BATCH_SIZE = CROSS_ENCODER_CONFIGS["bert"]["batch_size"]
+BERT_GRADIENT_ACCUMULATION_STEPS = CROSS_ENCODER_CONFIGS["bert"]["gradient_accumulation_steps"]
 BERT_LEARNING_RATE = CROSS_ENCODER_CONFIGS["bert"]["learning_rate"]
 BERT_EPOCHS = CROSS_ENCODER_CONFIGS["bert"]["epochs"]
 BERT_WEIGHT_DECAY = CROSS_ENCODER_CONFIGS["bert"]["weight_decay"]
@@ -111,6 +115,7 @@ BERT_USE_AMP = CROSS_ENCODER_CONFIGS["bert"]["use_amp"]
 BERTIN_MODEL_NAME = CROSS_ENCODER_CONFIGS["bertin"]["model_name"]
 BERTIN_MAX_LENGTH = CROSS_ENCODER_CONFIGS["bertin"]["max_length"]
 BERTIN_BATCH_SIZE = CROSS_ENCODER_CONFIGS["bertin"]["batch_size"]
+BERTIN_GRADIENT_ACCUMULATION_STEPS = CROSS_ENCODER_CONFIGS["bertin"]["gradient_accumulation_steps"]
 BERTIN_LEARNING_RATE = CROSS_ENCODER_CONFIGS["bertin"]["learning_rate"]
 BERTIN_EPOCHS = CROSS_ENCODER_CONFIGS["bertin"]["epochs"]
 BERTIN_WEIGHT_DECAY = CROSS_ENCODER_CONFIGS["bertin"]["weight_decay"]
@@ -120,6 +125,7 @@ BERTIN_USE_AMP = CROSS_ENCODER_CONFIGS["bertin"]["use_amp"]
 MDEBERTA_MODEL_NAME = CROSS_ENCODER_CONFIGS["mdeberta"]["model_name"]
 MDEBERTA_MAX_LENGTH = CROSS_ENCODER_CONFIGS["mdeberta"]["max_length"]
 MDEBERTA_BATCH_SIZE = CROSS_ENCODER_CONFIGS["mdeberta"]["batch_size"]
+MDEBERTA_GRADIENT_ACCUMULATION_STEPS = CROSS_ENCODER_CONFIGS["mdeberta"]["gradient_accumulation_steps"]
 MDEBERTA_LEARNING_RATE = CROSS_ENCODER_CONFIGS["mdeberta"]["learning_rate"]
 MDEBERTA_EPOCHS = CROSS_ENCODER_CONFIGS["mdeberta"]["epochs"]
 MDEBERTA_WEIGHT_DECAY = CROSS_ENCODER_CONFIGS["mdeberta"]["weight_decay"]
