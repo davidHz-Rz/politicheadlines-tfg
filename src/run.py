@@ -23,14 +23,16 @@ from config import (
     TEST_CSV,
     TEXT_WEIGHT,
     TRAIN_CSV,
-    USE_CLIP_FOR_TASK2,
+    USE_VLM_FOR_TASK2,
+    VLM_BACKEND,
     get_cross_encoder_runtime_config,
+    get_vlm_model_name,
 )
 from utils.data_utils import validate_columns
 from utils.metrics import score_submission
 from utils.submission import build_submission, save_submission, validate_submission
 
-from models.clip_ranker import load_clip, predict_task2_clip_plus_tfidf, predict_task2_semantic_plus_clip, predict_task2_crossencoder_plus_clip
+from models.vlm_ranker import load_vlm, predict_task2_vlm_plus_tfidf, predict_task2_semantic_plus_vlm, predict_task2_crossencoder_plus_vlm
 from models.tfidf_ranker import predict_tfidf
 from models.semantic_ranker import predict_semantic, SemanticRanker
 from models.cross_encoder_ranker import CrossEncoderConfig, CrossEncoderRanker
@@ -115,69 +117,75 @@ def main() -> None:
     # ---------------------------------------------------------
     # Task 2
     # ---------------------------------------------------------
-    if USE_CLIP_FOR_TASK2:
-        print("Cargando modelo CLIP...")
-        clip_model, clip_processor, device = load_clip()
-        print(f"Dispositivo CLIP: {device}")
+    if USE_VLM_FOR_TASK2:
+        vlm_name = get_vlm_model_name()
+        print(f"Cargando modelo {VLM_BACKEND.upper()}: {vlm_name}...")
+        vlm_model, vlm_processor, device = load_vlm()
+        print(f"Dispositivo {VLM_BACKEND.upper()}: {device}")
 
         if MODEL_NAME == "tfidf":
-            print("Generando predicciones para Task 2 (CLIP + TF-IDF)...")
-            task_2_preds = predict_task2_clip_plus_tfidf(
+            print(f"Generando predicciones para Task 2 ({VLM_BACKEND.upper()} + TF-IDF)...")
+            task_2_preds = predict_task2_vlm_plus_tfidf(
                 df_train=train_df,
                 df_pred=test_df,
                 images_dir=IMAGES_DIR,
-                clip_model=clip_model,
-                clip_processor=clip_processor,
+                vlm_model=vlm_model,
+                vlm_processor=vlm_processor,
+                backend=VLM_BACKEND,
                 device=device,
             )
 
         elif MODEL_NAME == "semantic":
-            print("Generando predicciones para Task 2 (Semantic + CLIP)...")
-            task_2_preds = predict_task2_semantic_plus_clip(
+            print(f"Generando predicciones para Task 2 (Semantic + {VLM_BACKEND.upper()})...")
+            task_2_preds = predict_task2_semantic_plus_vlm(
                 df_pred=test_df,
                 images_dir=IMAGES_DIR,
                 semantic_ranker=semantic_ranker,
-                clip_model=clip_model,
-                clip_processor=clip_processor,
+                vlm_model=vlm_model,
+                vlm_processor=vlm_processor,
+                backend=VLM_BACKEND,
                 device=device,
                 w_text=TEXT_WEIGHT,
                 w_img=IMAGE_WEIGHT,
             )
             
         elif MODEL_NAME == "bert":
-            print("Generando predicciones para Task 2 (BERT + CLIP)...")
-            task_2_preds = predict_task2_crossencoder_plus_clip(
+            print(f"Generando predicciones para Task 2 (BERT + {VLM_BACKEND.upper()})...")
+            task_2_preds = predict_task2_crossencoder_plus_vlm(
                 df_pred=test_df,
                 images_dir=IMAGES_DIR,
                 cross_encoder_ranker=ranker,
-                clip_model=clip_model,
-                clip_processor=clip_processor,
+                vlm_model=vlm_model,
+                vlm_processor=vlm_processor,
+                backend=VLM_BACKEND,
                 device=device,
                 w_text=TEXT_WEIGHT,
                 w_img=IMAGE_WEIGHT,
             )
 
         elif MODEL_NAME == "bertin":
-            print("Generando predicciones para Task 2 (BERTIN + CLIP)...")
-            task_2_preds = predict_task2_crossencoder_plus_clip(
+            print(f"Generando predicciones para Task 2 (BERTIN + {VLM_BACKEND.upper()})...")
+            task_2_preds = predict_task2_crossencoder_plus_vlm(
                 df_pred=test_df,
                 images_dir=IMAGES_DIR,
                 cross_encoder_ranker=ranker,
-                clip_model=clip_model,
-                clip_processor=clip_processor,
+                vlm_model=vlm_model,
+                vlm_processor=vlm_processor,
+                backend=VLM_BACKEND,
                 device=device,
                 w_text=TEXT_WEIGHT,
                 w_img=IMAGE_WEIGHT,
             )
 
         elif MODEL_NAME == "mdeberta":
-            print("Generando predicciones para Task 2 (mDeBERTa + CLIP)...")
-            task_2_preds = predict_task2_crossencoder_plus_clip(
+            print(f"Generando predicciones para Task 2 (mDeBERTa + {VLM_BACKEND.upper()})...")
+            task_2_preds = predict_task2_crossencoder_plus_vlm(
                 df_pred=test_df,
                 images_dir=IMAGES_DIR,
                 cross_encoder_ranker=ranker,
-                clip_model=clip_model,
-                clip_processor=clip_processor,
+                vlm_model=vlm_model,
+                vlm_processor=vlm_processor,
+                backend=VLM_BACKEND,
                 device=device,
                 w_text=TEXT_WEIGHT,
                 w_img=IMAGE_WEIGHT,
@@ -186,7 +194,7 @@ def main() -> None:
             raise ValueError(f"MODEL_NAME no soportado: {MODEL_NAME}")
 
     else:
-        print("USE_CLIP_FOR_TASK2 = False. Usando Task 1 como Task 2.")
+        print("USE_VLM_FOR_TASK2 = False. Usando Task 1 como Task 2.")
         task_2_preds = task_1_preds
 
     # ---------------------------------------------------------

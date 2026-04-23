@@ -38,7 +38,7 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "bert"
 # - "bertin"
 # - "mdeberta"
-MODEL_NAME = "mdeberta"
+MODEL_NAME = "bertin"
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
 # ============================================================
@@ -136,11 +136,21 @@ MDEBERTA_USE_AMP = CROSS_ENCODER_CONFIGS["mdeberta"]["use_amp"]
 # Task 2: configuración multimodal
 # ============================================================
 
-USE_CLIP_FOR_TASK2 = True
-TEXT_WEIGHT = 0.96
-IMAGE_WEIGHT = 0.04
+USE_VLM_FOR_TASK2 = True
+TEXT_WEIGHT = 0.98
+IMAGE_WEIGHT = 0.02
+
+# Backends soportados:
+# - "clip"
+# - "siglip"
+VLM_BACKEND = "siglip"
 
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
+SIGLIP_MODEL_NAME = "google/siglip-base-patch16-224" # Other SigLIP models tested: siglip2-base-patch16-224
+                                                      #                             siglip-base-patch16-384 
+
+# Compatibilidad con el código anterior
+USE_CLIP_FOR_TASK2 = USE_VLM_FOR_TASK2
 
 # ============================================================
 # Columnas y tokens
@@ -186,3 +196,12 @@ def print_config() -> None:
     print("IMAGES_DIR:", IMAGES_DIR)
     print("OUTPUT_SUBMISSION:", OUTPUT_SUBMISSION)
     print("OUTPUT_METRICS:", OUTPUT_METRICS)
+
+
+def get_vlm_model_name() -> str:
+    backend = VLM_BACKEND.lower().strip()
+    if backend == "clip":
+        return CLIP_MODEL_NAME
+    if backend == "siglip":
+        return SIGLIP_MODEL_NAME
+    raise ValueError(f"VLM_BACKEND no soportado: {VLM_BACKEND}")
