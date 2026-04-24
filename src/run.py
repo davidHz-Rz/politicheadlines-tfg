@@ -30,6 +30,7 @@ from config import (
     VLM_BACKEND,
     get_cross_encoder_runtime_config,
     get_vlm_model_name,
+    CROSS_ENCODER_ENSEMBLE_MEMBERS
 )
 from utils.data_utils import validate_columns
 from utils.metrics import score_submission
@@ -40,7 +41,7 @@ from models.tfidf_ranker import predict_tfidf
 from models.bm25_ranker import BM25Ranker, build_bm25_corpus
 from models.semantic_ranker import SemanticRanker
 from models.cross_encoder_ranker import CrossEncoderConfig, CrossEncoderRanker
-
+from models.cross_encoder_ensemble_ranker import CrossEncoderEnsembleRanker, EnsembleMember
 
 def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
     cfg = get_cross_encoder_runtime_config(model_key)
@@ -123,6 +124,17 @@ def main() -> None:
         print(f"Dispositivo mDeBERTa: {ranker.device}")
         print("Generando predicciones para Task 1 (mDeBERTa)...")
         task_1_preds = ranker.predict_dataframe(test_df)
+        
+    elif MODEL_NAME == "crossencoder_ensemble":
+        print("Cargando ensemble de cross-encoders...")
+        members = [
+            EnsembleMember(model_key=name, weight=weight)
+            for name, weight in CROSS_ENCODER_ENSEMBLE_MEMBERS
+        ]
+        ranker = CrossEncoderEnsembleRanker(members)
+        print("Miembros ensemble:", CROSS_ENCODER_ENSEMBLE_MEMBERS)
+        print("Generando predicciones para Task 1...")
+        task_1_preds = ranker.predict_dataframe(test_df)
 
     else:
         raise ValueError(f"MODEL_NAME no soportado: {MODEL_NAME}")
@@ -176,7 +188,7 @@ def main() -> None:
                 w_img=IMAGE_WEIGHT,
             )
 
-        elif MODEL_NAME in {"bert", "bertin", "mdeberta"}:
+        elif MODEL_NAME in {"bert", "bertin", "mdeberta", "crossencoder_ensemble"}:
             print(f"Generando predicciones para Task 2 ({MODEL_NAME} + {VLM_BACKEND.upper()})...")
             task_2_preds = predict_task2_crossencoder_plus_vlm(
                 df_pred=test_df,

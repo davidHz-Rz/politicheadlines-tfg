@@ -39,7 +39,8 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "bert"
 # - "bertin"
 # - "mdeberta"
-MODEL_NAME = "semantic"
+# - "crossencoder_ensemble"
+MODEL_NAME = "crossencoder_ensemble"
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
 # ============================================================
@@ -133,7 +134,16 @@ MDEBERTA_WEIGHT_DECAY = CROSS_ENCODER_CONFIGS["mdeberta"]["weight_decay"]
 MDEBERTA_WARMUP_RATIO = CROSS_ENCODER_CONFIGS["mdeberta"]["warmup_ratio"]
 MDEBERTA_USE_AMP = CROSS_ENCODER_CONFIGS["mdeberta"]["use_amp"]
 
+
 # ============================================================
+# COnfiguración ensemble
+# ============================================================
+
+CROSS_ENCODER_ENSEMBLE_MEMBERS = [
+    ("bert", 0.70),
+    ("bertin", 0.30),
+]
+
 # ============================================================
 # Configuración BM25
 # ============================================================
@@ -144,21 +154,22 @@ BM25_B = 0.5
 # Usa None para emplear todos los términos del artículo.
 BM25_QUERY_TERM_LIMIT = 512
 
+
+# ============================================================
 # Task 2: configuración multimodal
 # ============================================================
 
 USE_VLM_FOR_TASK2 = True
-TEXT_WEIGHT = 0.96
-IMAGE_WEIGHT = 0.04
+TEXT_WEIGHT = 0.98
+IMAGE_WEIGHT = 0.02
 
 # Backends soportados:
 # - "clip"
 # - "siglip"
-VLM_BACKEND = "clip"
+VLM_BACKEND = "siglip"
 
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-SIGLIP_MODEL_NAME = "google/siglip-base-patch16-224" # Other SigLIP models tested: siglip2-base-patch16-224
-                                                     #                             siglip-base-patch16-384 
+SIGLIP_MODEL_NAME = "google/siglip2-base-patch16-224" # siglip-base-patch16-224, siglip2-base-patch16-224, siglip-base-patch16-384 
 
 # Compatibilidad con el código anterior
 USE_CLIP_FOR_TASK2 = USE_VLM_FOR_TASK2
