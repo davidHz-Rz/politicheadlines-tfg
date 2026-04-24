@@ -14,6 +14,9 @@ if str(SRC_DIR) not in sys.path:
 
 from config import (
     ALPHA,
+    BM25_B,
+    BM25_K1,
+    BM25_QUERY_TERM_LIMIT,
     IMAGE_WEIGHT,
     IMAGES_DIR,
     MODEL_NAME,
@@ -32,9 +35,10 @@ from utils.data_utils import validate_columns
 from utils.metrics import score_submission
 from utils.submission import build_submission, save_submission, validate_submission
 
-from models.vlm_ranker import load_vlm, predict_task2_vlm_plus_tfidf, predict_task2_semantic_plus_vlm, predict_task2_crossencoder_plus_vlm
+from models.vlm_ranker import load_vlm, predict_task2_vlm_plus_tfidf, predict_task2_vlm_plus_bm25, predict_task2_semantic_plus_vlm, predict_task2_crossencoder_plus_vlm
 from models.tfidf_ranker import predict_tfidf
-from models.semantic_ranker import predict_semantic, SemanticRanker
+from models.bm25_ranker import BM25Ranker, build_bm25_corpus
+from models.semantic_ranker import SemanticRanker
 from models.cross_encoder_ranker import CrossEncoderConfig, CrossEncoderRanker
 
 
@@ -70,28 +74,39 @@ def main() -> None:
     # ---------------------------------------------------------
     if MODEL_NAME == "tfidf":
         print("Generando predicciones para Task 1 (TF-IDF)...")
-        task_1_preds = predict_tfidf(
-            df_train=train_df,
-            df_pred=test_df,
+        task_1_preds = predict_tfidf(df_train=train_df, df_pred=test_df)
+
+    elif MODEL_NAME == "bm25":
+        print("Cargando BM25...")
+        bm25_ranker = BM25Ranker(
+            k1=BM25_K1,
+            b=BM25_B,
+            query_term_limit=BM25_QUERY_TERM_LIMIT,
         )
+        bm25_ranker.fit(build_bm25_corpus(train_df))
+
+        print("Generando predicciones para Task 1 (BM25)...")
+        task_1_preds = []
+        for _, row in test_df.iterrows():
+            article = str(row.get("article_body", "") or "")
+            titles = [str(row.get(f"title_{i}", "") or "") for i in range(1, 11)]
+            task_1_preds.append(" ".join(bm25_ranker.rank_titles(article, titles)))
 
     elif MODEL_NAME == "semantic":
         print("Cargando Semantic Ranker...")
         semantic_ranker = SemanticRanker()
-    
+
         print("Generando predicciones para Task 1 (Semantic Ranker)...")
         task_1_preds = []
         for _, row in test_df.iterrows():
             article = str(row.get("article_body", "") or "")
             titles = [str(row.get(f"title_{i}", "") or "") for i in range(1, 11)]
-            ranked = semantic_ranker.rank_titles(article, titles)
-            task_1_preds.append(" ".join(ranked))
+            task_1_preds.append(" ".join(semantic_ranker.rank_titles(article, titles)))
 
     elif MODEL_NAME == "bert":
         print("Cargando BERT entrenado...")
         ranker = build_crossencoder_ranker("bert")
         print(f"Dispositivo BERT: {ranker.device}")
-
         print("Generando predicciones para Task 1 (BERT)...")
         task_1_preds = ranker.predict_dataframe(test_df)
 
@@ -99,7 +114,6 @@ def main() -> None:
         print("Cargando BERTIN entrenado...")
         ranker = build_crossencoder_ranker("bertin")
         print(f"Dispositivo BERTIN: {ranker.device}")
-
         print("Generando predicciones para Task 1 (BERTIN)...")
         task_1_preds = ranker.predict_dataframe(test_df)
 
@@ -107,7 +121,6 @@ def main() -> None:
         print("Cargando mDeBERTa entrenado...")
         ranker = build_crossencoder_ranker("mdeberta")
         print(f"Dispositivo mDeBERTa: {ranker.device}")
-
         print("Generando predicciones para Task 1 (mDeBERTa)...")
         task_1_preds = ranker.predict_dataframe(test_df)
 
@@ -135,6 +148,20 @@ def main() -> None:
                 device=device,
             )
 
+        elif MODEL_NAME == "bm25":
+            print(f"Generando predicciones para Task 2 (BM25 + {VLM_BACKEND.upper()})...")
+            task_2_preds = predict_task2_vlm_plus_bm25(
+                df_pred=test_df,
+                images_dir=IMAGES_DIR,
+                bm25_ranker=bm25_ranker,
+                vlm_model=vlm_model,
+                vlm_processor=vlm_processor,
+                backend=VLM_BACKEND,
+                device=device,
+                w_text=TEXT_WEIGHT,
+                w_img=IMAGE_WEIGHT,
+            )
+
         elif MODEL_NAME == "semantic":
             print(f"Generando predicciones para Task 2 (Semantic + {VLM_BACKEND.upper()})...")
             task_2_preds = predict_task2_semantic_plus_vlm(
@@ -148,37 +175,9 @@ def main() -> None:
                 w_text=TEXT_WEIGHT,
                 w_img=IMAGE_WEIGHT,
             )
-            
-        elif MODEL_NAME == "bert":
-            print(f"Generando predicciones para Task 2 (BERT + {VLM_BACKEND.upper()})...")
-            task_2_preds = predict_task2_crossencoder_plus_vlm(
-                df_pred=test_df,
-                images_dir=IMAGES_DIR,
-                cross_encoder_ranker=ranker,
-                vlm_model=vlm_model,
-                vlm_processor=vlm_processor,
-                backend=VLM_BACKEND,
-                device=device,
-                w_text=TEXT_WEIGHT,
-                w_img=IMAGE_WEIGHT,
-            )
 
-        elif MODEL_NAME == "bertin":
-            print(f"Generando predicciones para Task 2 (BERTIN + {VLM_BACKEND.upper()})...")
-            task_2_preds = predict_task2_crossencoder_plus_vlm(
-                df_pred=test_df,
-                images_dir=IMAGES_DIR,
-                cross_encoder_ranker=ranker,
-                vlm_model=vlm_model,
-                vlm_processor=vlm_processor,
-                backend=VLM_BACKEND,
-                device=device,
-                w_text=TEXT_WEIGHT,
-                w_img=IMAGE_WEIGHT,
-            )
-
-        elif MODEL_NAME == "mdeberta":
-            print(f"Generando predicciones para Task 2 (mDeBERTa + {VLM_BACKEND.upper()})...")
+        elif MODEL_NAME in {"bert", "bertin", "mdeberta"}:
+            print(f"Generando predicciones para Task 2 ({MODEL_NAME} + {VLM_BACKEND.upper()})...")
             task_2_preds = predict_task2_crossencoder_plus_vlm(
                 df_pred=test_df,
                 images_dir=IMAGES_DIR,

@@ -25,7 +25,7 @@ DATASET_DIR = DATA_DIR / ACTIVE_DATASET
 # ============================================================
 
 TRAIN_CSV = DATASET_DIR / "train_public.csv"
-TEST_CSV = DATASET_DIR / "dev_public.csv"   # dev_public.csv (metrics) / test_public.csv (submission)
+TEST_CSV = DATASET_DIR / "test_public.csv"   # dev_public.csv (metrics) / test_public.csv (submission)
 IMAGES_DIR = DATASET_DIR / "images"
 
 # ============================================================
@@ -35,10 +35,11 @@ IMAGES_DIR = DATASET_DIR / "images"
 # Opciones:
 # - "tfidf"
 # - "semantic"
+# - "bm25"
 # - "bert"
 # - "bertin"
 # - "mdeberta"
-MODEL_NAME = "bertin"
+MODEL_NAME = "semantic"
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
 # ============================================================
@@ -133,21 +134,31 @@ MDEBERTA_WARMUP_RATIO = CROSS_ENCODER_CONFIGS["mdeberta"]["warmup_ratio"]
 MDEBERTA_USE_AMP = CROSS_ENCODER_CONFIGS["mdeberta"]["use_amp"]
 
 # ============================================================
+# ============================================================
+# Configuración BM25
+# ============================================================
+
+BM25_K1 = 1.75
+BM25_B = 0.5
+# Limita los términos de query del artículo a los más informativos.
+# Usa None para emplear todos los términos del artículo.
+BM25_QUERY_TERM_LIMIT = 512
+
 # Task 2: configuración multimodal
 # ============================================================
 
 USE_VLM_FOR_TASK2 = True
-TEXT_WEIGHT = 0.98
-IMAGE_WEIGHT = 0.02
+TEXT_WEIGHT = 0.96
+IMAGE_WEIGHT = 0.04
 
 # Backends soportados:
 # - "clip"
 # - "siglip"
-VLM_BACKEND = "siglip"
+VLM_BACKEND = "clip"
 
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
 SIGLIP_MODEL_NAME = "google/siglip-base-patch16-224" # Other SigLIP models tested: siglip2-base-patch16-224
-                                                      #                             siglip-base-patch16-384 
+                                                     #                             siglip-base-patch16-384 
 
 # Compatibilidad con el código anterior
 USE_CLIP_FOR_TASK2 = USE_VLM_FOR_TASK2

@@ -302,6 +302,53 @@ def predict_task2_clip_plus_tfidf(
     )
 
 
+
+def predict_task2_vlm_plus_bm25(
+    df_pred: pd.DataFrame,
+    images_dir: Path,
+    bm25_ranker,
+    vlm_model,
+    vlm_processor,
+    device: str,
+    backend: str = VLM_BACKEND,
+    w_text: float = TEXT_WEIGHT,
+    w_img: float = IMAGE_WEIGHT,
+) -> List[str]:
+    preds = []
+    missing_images = 0
+
+    for _, row in df_pred.iterrows():
+        titles = get_titles(row)
+        source_text = str(row.get("article_body", "") or "")
+        text_scores = bm25_ranker.score_titles(source_text, titles)
+
+        img_path = find_image_path(images_dir, row.get("image_hash", ""))
+        if img_path is None:
+            missing_images += 1
+            order = np.argsort(-text_scores)
+            preds.append(" ".join([TOKENS_ALL[i] for i in order]))
+            continue
+
+        img_scores = vlm_logits_image_vs_titles(
+            vlm_model=vlm_model,
+            vlm_processor=vlm_processor,
+            device=device,
+            image_path=img_path,
+            titles=titles,
+            backend=backend,
+        )
+
+        text01 = minmax_01(text_scores)
+        img01 = minmax_01(img_scores)
+        final_scores = (w_text * text01) + (w_img * img01)
+
+        order = np.argsort(-final_scores)
+        preds.append(" ".join([TOKENS_ALL[i] for i in order]))
+
+    if missing_images:
+        print(f"[WARN] Missing images for {missing_images} rows. Used text-only fallback.")
+
+    return preds
 def predict_task2_semantic_plus_vlm(
     df_pred: pd.DataFrame,
     images_dir: Path,
