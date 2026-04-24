@@ -1,86 +1,82 @@
 # PoliticHeadlinES TFG
 
-Sistema experimental para la tarea de **selección y ranking automático de titulares en noticias políticas en español**, desarrollado en el contexto del **Trabajo Fin de Grado (TFG)** y orientado a la competición **PoliticHeadlinES**.
+Sistema experimental para la tarea de **selección y ranking automático de titulares en noticias políticas en español**, desarrollado como **Trabajo Fin de Grado (TFG)** y orientado a la competición **PoliticHeadlinES**.
 
 ---
 
-# Objetivo
+## Objetivo
 
-El objetivo del proyecto es construir y evaluar modelos capaces de **ordenar automáticamente un conjunto de diez titulares candidatos** según su adecuación a una noticia política en español.
+Construir y evaluar modelos capaces de **ordenar automáticamente diez titulares candidatos** según su adecuación a una noticia política en español.
 
-Se abordan dos subtareas:
+Se trabajan dos subtareas:
 
-* **Task 1 (textual):** ranking de titulares utilizando únicamente el contenido textual del artículo.
-* **Task 2 (multimodal):** ranking de titulares combinando texto e imagen asociada a la noticia.
-
----
-
-# Enfoque desarrollado
-
-A lo largo del proyecto se implementaron varios enfoques progresivamente más potentes:
-
-## 1. Baseline TF-IDF
-
-* Sistema de referencia basado en similitud léxica.
-* Integración multimodal inicial mediante CLIP.
-
-### Resultados aproximados
-
-* **Mean PA-nDCG@K:** `0.8159`
+- **Task 1 (textual):** ranking usando únicamente el contenido textual del artículo.
+- **Task 2 (multimodal):** ranking combinando texto e imagen asociada.
 
 ---
 
-## 2. Modelo semántico
+## Enfoques implementados
 
-* Ranking textual basado en representaciones semánticas profundas.
-* Mejora significativa sobre el baseline léxico.
+A lo largo del proyecto se implementaron y compararon varios sistemas:
 
-### Resultados obtenidos
+### 1. Métodos clásicos de recuperación
 
-* **Task 1:** `0.8758677822040812`
-* **Task 2:** `0.8158745760583925`
-* **Mean:** `0.8458711791312369`
+- TF-IDF
+- BM25
 
----
+Útiles como baseline y para análisis comparativo frente a modelos neuronales.
 
-## 3. Cross-Encoder textual (modelo principal)
+### 2. Rankers semánticos densos
 
-* Fine-tuning de un modelo BERT para español sobre pares:
+- Semantic Ranker basado en embeddings.
+
+### 3. Cross-Encoders Transformer
+
+Modelos fine-tuned para puntuar pares:
 
 ```text
 (article_body, title)
 ```
 
-### Modelo utilizado
+Modelos principales utilizados:
 
-```text
-dccuchile/bert-base-spanish-wwm-cased
-```
+- `dccuchile/bert-base-spanish-wwm-cased` (**BETO**)
+- **BERTIN**
+- mDeBERTa (experimental)
 
-### Entrenamiento inicial (dataset reducido)
+### 4. Sistemas multimodales
 
-* **Mean PA-nDCG@K:** `0.9349178978633903`
+Fusión tardía de scores textuales con modelos visión-lenguaje:
 
-### Entrenamiento ampliado (train_corpora)
+- CLIP
+- SigLIP
 
-* **Task 1:** `0.9526597750789877`
+### 5. Ensemble de Cross-Encoders
+
+Combinación ponderada de modelos textuales para mejorar robustez y generalización.
 
 ---
 
-## 4. Fusión multimodal con CLIP (modelo final para Task 2)
+## Mejor resultado en leaderboard
 
-Combinación del score textual del cross-encoder con una señal visual obtenida mediante:
+El mejor sistema enviado hasta la fecha fue un **ensemble textual BETO + BERTIN** con señal visual ligera para Task 2.
+
+### Resultado oficial
 
 ```text
-openai/clip-vit-base-patch32
+metric_1_3 = 0.8249201498036288
+metric_2_3 = 0.8244442729634858
+mean_ndcg = 0.8246822113835572
 ```
 
-### Estrategia
+### Configuración ganadora
 
-* Fusión tardía de scores normalizados.
-* Ajuste manual de pesos.
+```text
+BETO   = 0.70
+BERTIN = 0.30
+```
 
-### Mejor configuración encontrada
+Para Task 2:
 
 ```text
 texto = 0.96
@@ -89,106 +85,55 @@ imagen = 0.04
 
 ---
 
-# Resultados finales
+## Hallazgos relevantes
 
-## Mejor sistema global obtenido
-
-* **Task 1 (textual):** `0.9526597750789877`
-* **Task 2 (multimodal):** `0.95315642541915`
-* **Mean PA-nDCG@K:** `0.9529081002490689`
-
-### Resumen técnico
-
-* Modelo textual: `dccuchile/bert-base-spanish-wwm-cased`
-* Enfoque textual: Cross-Encoder entrenado
-* Enfoque multimodal: Fusión tardía con CLIP
-* Pesos finales:
-
-  * texto = `0.96`
-  * imagen = `0.04`
+- Los **cross-encoders** superaron claramente a métodos clásicos como BM25 y TF-IDF en leaderboard real.
+- Los métodos clásicos fueron útiles como referencia y análisis, pero no como sistema final.
+- El **ensemble de modelos fuertes** generalizó mejor que los modelos individuales.
+- Una pequeña señal visual ayudó en Task 2 sin dominar la decisión.
 
 ---
 
-# Métrica de evaluación
+## Métrica de evaluación
 
 Se emplea la métrica oficial de la competición:
 
-* **PA-nDCG@K**
+- **PA-nDCG@K / mean_ndcg**
 
 ---
 
-# Estructura actual del proyecto
+## Estructura del proyecto
 
 ```text
 politicheadlines/
-│
-├── data/                 # datasets (ignorado por git)
-├── outputs/              # modelos, métricas y resultados
-│   └── bert_model/
-│
 ├── src/
-│   ├── config.py         # configuración principal
-│   ├── run.py            # inferencia unificada
-│
+│   ├── config.py
+│   ├── run.py
 │   ├── models/
-│   │   ├── bert_ranker.py
-│   │   ├── clip_ranker.py
+│   │   ├── bm25_ranker.py
+│   │   ├── cross_encoder_ranker.py
+│   │   ├── cross_encoder_ensemble_ranker.py
 │   │   ├── semantic_ranker.py
-│   │   └── tfidf_ranker.py
-│
+│   │   ├── tfidf_ranker.py
+│   │   └── vlm_ranker.py
 │   ├── training/
-│   │   └── train_bert.py
-│
 │   └── utils/
-│       ├── data_utils.py
-│       ├── metrics.py
-│       └── submission.py
-│
 ├── requirements.txt
 └── README.md
 ```
 
 ---
 
-# Configuración principal
+## Uso
 
-Todo se controla desde:
-
-```text
-src/config.py
-```
-
-## Selección de modelo
-
-```python
-MODEL_NAME = "bert"
-```
-
-Opciones disponibles:
-
-```text
-tfidf
-semantic
-bert
-```
-
-## Selección de dataset
-
-```python
-ACTIVE_DATASET = "train_corpora"
-```
-
----
-
-# Uso
-
-## Entrenamiento del modelo BERT
+### Entrenamiento
 
 ```bash
 python src/training/train_bert.py
+python src/training/train_bertin.py
 ```
 
-## Inferencia / generación de resultados
+### Inferencia / evaluación
 
 ```bash
 python src/run.py
@@ -196,41 +141,19 @@ python src/run.py
 
 ---
 
-# Tecnologías utilizadas
+## Tecnologías utilizadas
 
-* Python
-* PyTorch
-* Transformers (Hugging Face)
-* Scikit-learn
-* CLIP
-* Pandas
-* NumPy
-
----
-
-# Hardware principal utilizado
-
-```text
-NVIDIA GeForce RTX 4050 Laptop GPU
-CUDA 12.6
-PyTorch 2.x
-```
+- Python
+- PyTorch
+- Hugging Face Transformers
+- Scikit-learn
+- Pandas
+- NumPy
 
 ---
 
-# Trabajo futuro (segunda fase)
+## Trabajo futuro inmediato
 
-Durante la segunda fase del proyecto se entrenarán y compararán nuevos modelos:
-
-* BETO optimizado
-* XLM-R
-* Nuevos rerankers
-* Modelos LLM
-* Ensambles multimodales
-
----
-
-# Autor
-
-**David Hernández Ruiz**
-Trabajo Fin de Grado
+- Integración de **LLMs como rankers o rerankers**
+- Comparación frente al ensemble actual
+- Estudio de explicabilidad de rankings
