@@ -25,7 +25,7 @@ DATASET_DIR = DATA_DIR / ACTIVE_DATASET
 # ============================================================
 
 TRAIN_CSV = DATASET_DIR / "train_public.csv"
-TEST_CSV = DATASET_DIR / "test_public.csv"   # dev_public.csv (metrics) / test_public.csv (submission)
+TEST_CSV = DATASET_DIR / "dev_public.csv"   # dev_public.csv (metrics) / test_public.csv (submission)
 IMAGES_DIR = DATASET_DIR / "images"
 
 # ============================================================
@@ -40,7 +40,8 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "bertin"
 # - "mdeberta"
 # - "crossencoder_ensemble"
-MODEL_NAME = "crossencoder_ensemble"
+# - "llm_ranker"
+MODEL_NAME = "llm_ranker"
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
 # ============================================================
@@ -227,3 +228,35 @@ def get_vlm_model_name() -> str:
     if backend == "siglip":
         return SIGLIP_MODEL_NAME
     raise ValueError(f"VLM_BACKEND no soportado: {VLM_BACKEND}")
+
+# ============================================================
+# Configuración LLM ranker
+# ============================================================
+
+# Para usarlo, poner MODEL_NAME = "llm_ranker".
+# Modelos recomendados:
+# - "Qwen/Qwen2.5-7B-Instruct"
+# - "meta-llama/Llama-3.1-8B-Instruct"
+LLM_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
+
+# Modos:
+# - "solo": usa únicamente el LLM como ranker textual.
+# - "ensemble": combina score base + score LLM.
+# - "rerank": genera ranking base y reordena el top-k con LLM.
+LLM_RANKER_MODE = "solo"
+
+# Ranker base para "ensemble" o "rerank".
+# Soportado: "crossencoder_ensemble", "bert", "bertin", "mdeberta", "bm25", "semantic".
+LLM_BASE_RANKER = "crossencoder_ensemble"
+LLM_RERANK_TOP_K = 10
+LLM_BASE_WEIGHT = 0.85
+LLM_WEIGHT = 0.15
+
+# Inferencia LLM.
+LLM_MAX_INPUT_CHARS = 3500
+LLM_MAX_NEW_TOKENS = 512
+LLM_TEMPERATURE = 0.0
+LLM_DO_SAMPLE = False
+LLM_LOAD_IN_4BIT = True
+LLM_TORCH_DTYPE = "auto"
+LLM_TRUST_REMOTE_CODE = False

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Sequence
 
 import numpy as np
 import pandas as pd
 import torch
 from PIL import Image
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 from transformers import AutoModel, AutoProcessor, CLIPModel, CLIPProcessor
 
 from config import (
@@ -16,7 +14,6 @@ from config import (
     IMAGE_WEIGHT,
     SIGLIP_MODEL_NAME,
     TEXT_WEIGHT,
-    TITLE_COLS,
     TOKENS_ALL,
     VLM_BACKEND,
     get_vlm_model_name,
@@ -57,6 +54,13 @@ def load_siglip(model_name: str = SIGLIP_MODEL_NAME):
     return load_vlm(backend="siglip", model_name=model_name)
 
 
+def ranking_from_scores(scores: Sequence[float]) -> str:
+    """Convierte scores por título en ranking tokenizado t1 ... t10."""
+    scores = np.asarray(scores, dtype=float)
+    order = np.argsort(-scores)
+    return " ".join(TOKENS_ALL[i] for i in order)
+
+
 @torch.inference_mode()
 def vlm_logits_image_vs_titles(
     vlm_model,
@@ -86,8 +90,7 @@ def vlm_logits_image_vs_titles(
 
     inputs = vlm_processor(**processor_kwargs).to(device)
     outputs = vlm_model(**inputs)
-    logits = outputs.logits_per_image[0].detach().float().cpu().numpy()
-    return logits
+    return outputs.logits_per_image[0].detach().float().cpu().numpy()
 
 
 @torch.inference_mode()
@@ -155,12 +158,13 @@ def predict_task2_vlm(
     device: str,
     backend: str = VLM_BACKEND,
 ) -> List[str]:
+    """Ranking únicamente visual. Se conserva por compatibilidad."""
     preds = []
     missing_images = 0
 
     for _, row in df_pred.iterrows():
-        img_path = find_image_path(images_dir, row.get("image_hash", ""))
         titles = get_titles(row)
+        img_path = find_image_path(images_dir, row.get("image_hash", ""))
 
         if img_path is None:
             missing_images += 1
@@ -203,130 +207,47 @@ def predict_task2_clip(
     )
 
 
-def build_text_vectorizer(
-    df_train: pd.DataFrame,
-    max_features: int = 50_000,
-) -> TfidfVectorizer:
-    corpus = []
-
-    for _, row in df_train.iterrows():
-        corpus.append(str(row.get("article_body", "") or ""))
-        corpus.extend([str(row.get(col, "") or "") for col in TITLE_COLS])
-
-    vectorizer = TfidfVectorizer(
-        max_features=max_features,
-        ngram_range=(1, 2),
-        min_df=1,
-    )
-    vectorizer.fit(corpus)
-    return vectorizer
-
-
-def predict_task2_vlm_plus_tfidf(
-    df_train: pd.DataFrame,
+def predict_task2_vlm_plus_text_scores(
     df_pred: pd.DataFrame,
     images_dir: Path,
+    text_scores_list: Sequence[Sequence[float]],
     vlm_model,
     vlm_processor,
     device: str,
     backend: str = VLM_BACKEND,
     w_text: float = TEXT_WEIGHT,
     w_img: float = IMAGE_WEIGHT,
-    max_features: int = 50_000,
 ) -> List[str]:
-    vectorizer = build_text_vectorizer(df_train, max_features=max_features)
+    """
+    Función genérica para Task 2.
 
-    preds = []
-    missing_images = 0
-
-    for _, row in df_pred.iterrows():
-        titles = get_titles(row)
-
-        source_text = str(row.get("article_body", "") or "")
-        src_vec = vectorizer.transform([source_text])
-        title_vecs = vectorizer.transform(titles)
-        sims_text = cosine_similarity(src_vec, title_vecs)[0]
-
-        img_path = find_image_path(images_dir, row.get("image_hash", ""))
-        if img_path is None:
-            missing_images += 1
-            order = np.argsort(-sims_text)
-            preds.append(" ".join([TOKENS_ALL[i] for i in order]))
-            continue
-
-        sims_img = vlm_logits_image_vs_titles(
-            vlm_model=vlm_model,
-            vlm_processor=vlm_processor,
-            device=device,
-            image_path=img_path,
-            titles=titles,
-            backend=backend,
+    Recibe los scores textuales ya calculados para Task 1, añade la señal
+    imagen-titulares del VLM y devuelve el ranking multimodal. Así evitamos
+    recalcular TF-IDF/BM25/Semantic/CrossEncoder/LLM para Task 2.
+    """
+    if len(text_scores_list) != len(df_pred):
+        raise ValueError(
+            "text_scores_list debe tener una entrada por fila de df_pred: "
+            f"{len(text_scores_list)} != {len(df_pred)}"
         )
 
-        text01 = minmax_01(sims_text)
-        img01 = minmax_01(sims_img)
-
-        scores = (w_text * text01) + (w_img * img01)
-        order = np.argsort(-scores)
-
-        preds.append(" ".join([TOKENS_ALL[i] for i in order]))
-
-    if missing_images:
-        print(f"[WARN] Missing images for {missing_images} rows. Used text-only fallback.")
-
-    return preds
-
-
-def predict_task2_clip_plus_tfidf(
-    df_train: pd.DataFrame,
-    df_pred: pd.DataFrame,
-    images_dir: Path,
-    clip_model: CLIPModel,
-    clip_processor: CLIPProcessor,
-    device: str,
-    w_text: float = TEXT_WEIGHT,
-    w_img: float = IMAGE_WEIGHT,
-    max_features: int = 50_000,
-) -> List[str]:
-    return predict_task2_vlm_plus_tfidf(
-        df_train=df_train,
-        df_pred=df_pred,
-        images_dir=images_dir,
-        vlm_model=clip_model,
-        vlm_processor=clip_processor,
-        device=device,
-        backend="clip",
-        w_text=w_text,
-        w_img=w_img,
-        max_features=max_features,
-    )
-
-
-
-def predict_task2_vlm_plus_bm25(
-    df_pred: pd.DataFrame,
-    images_dir: Path,
-    bm25_ranker,
-    vlm_model,
-    vlm_processor,
-    device: str,
-    backend: str = VLM_BACKEND,
-    w_text: float = TEXT_WEIGHT,
-    w_img: float = IMAGE_WEIGHT,
-) -> List[str]:
-    preds = []
+    preds: List[str] = []
     missing_images = 0
 
-    for _, row in df_pred.iterrows():
+    for row_idx, (_, row) in enumerate(df_pred.iterrows()):
         titles = get_titles(row)
-        source_text = str(row.get("article_body", "") or "")
-        text_scores = bm25_ranker.score_titles(source_text, titles)
+        text_scores = np.asarray(text_scores_list[row_idx], dtype=float)
+
+        if len(text_scores) != len(titles):
+            raise ValueError(
+                f"Fila {row_idx}: número de scores textuales inválido "
+                f"({len(text_scores)} scores para {len(titles)} títulos)."
+            )
 
         img_path = find_image_path(images_dir, row.get("image_hash", ""))
         if img_path is None:
             missing_images += 1
-            order = np.argsort(-text_scores)
-            preds.append(" ".join([TOKENS_ALL[i] for i in order]))
+            preds.append(ranking_from_scores(text_scores))
             continue
 
         img_scores = vlm_logits_image_vs_titles(
@@ -338,60 +259,11 @@ def predict_task2_vlm_plus_bm25(
             backend=backend,
         )
 
-        text01 = minmax_01(text_scores)
-        img01 = minmax_01(img_scores)
-        final_scores = (w_text * text01) + (w_img * img01)
+        final_scores = (w_text * minmax_01(text_scores)) + (w_img * minmax_01(img_scores))
+        preds.append(ranking_from_scores(final_scores))
 
-        order = np.argsort(-final_scores)
-        preds.append(" ".join([TOKENS_ALL[i] for i in order]))
-
-    if missing_images:
-        print(f"[WARN] Missing images for {missing_images} rows. Used text-only fallback.")
-
-    return preds
-def predict_task2_semantic_plus_vlm(
-    df_pred: pd.DataFrame,
-    images_dir: Path,
-    semantic_ranker,
-    vlm_model,
-    vlm_processor,
-    device: str,
-    backend: str = VLM_BACKEND,
-    w_text: float = 0.96,
-    w_img: float = 0.04,
-) -> List[str]:
-    preds = []
-    missing_images = 0
-
-    for _, row in df_pred.iterrows():
-        article = str(row.get("article_body", "") or "")
-        titles = get_titles(row)
-
-        text_scores = semantic_ranker.score_titles(article, titles)
-
-        img_path = find_image_path(images_dir, row.get("image_hash", ""))
-        if img_path is None:
-            missing_images += 1
-            order = np.argsort(-text_scores)
-            preds.append(" ".join([TOKENS_ALL[i] for i in order]))
-            continue
-
-        img_scores = vlm_logits_image_vs_titles(
-            vlm_model=vlm_model,
-            vlm_processor=vlm_processor,
-            device=device,
-            image_path=img_path,
-            titles=titles,
-            backend=backend,
-        )
-
-        text01 = minmax_01(text_scores)
-        img01 = minmax_01(img_scores)
-
-        final_scores = (w_text * text01) + (w_img * img01)
-
-        order = np.argsort(-final_scores)
-        preds.append(" ".join([TOKENS_ALL[i] for i in order]))
+        if (row_idx + 1) % 100 == 0:
+            print(f"Predichas Task 2 {row_idx + 1}/{len(df_pred)} filas...")
 
     if missing_images:
         print(f"[WARN] Missing images for {missing_images} rows. Used text-only fallback.")
@@ -399,97 +271,45 @@ def predict_task2_semantic_plus_vlm(
     return preds
 
 
-def predict_task2_semantic_plus_clip(
-    df_pred: pd.DataFrame,
-    images_dir: Path,
-    semantic_ranker,
-    clip_model: CLIPModel,
-    clip_processor: CLIPProcessor,
-    device: str,
-    w_text: float = 0.96,
-    w_img: float = 0.04,
-) -> List[str]:
-    return predict_task2_semantic_plus_vlm(
-        df_pred=df_pred,
-        images_dir=images_dir,
-        semantic_ranker=semantic_ranker,
-        vlm_model=clip_model,
-        vlm_processor=clip_processor,
-        device=device,
-        backend="clip",
-        w_text=w_text,
-        w_img=w_img,
+# Aliases de compatibilidad para código anterior. Internamente ya no recalculan texto;
+# se recomienda usar predict_task2_vlm_plus_text_scores desde run.py.
+def predict_task2_crossencoder_plus_vlm(*args, **kwargs):
+    raise RuntimeError(
+        "predict_task2_crossencoder_plus_vlm está obsoleto. Usa "
+        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
     )
 
 
-def predict_task2_crossencoder_plus_vlm(
-    df_pred: pd.DataFrame,
-    images_dir: Path,
-    cross_encoder_ranker,
-    vlm_model,
-    vlm_processor,
-    device: str,
-    backend: str = VLM_BACKEND,
-    w_text: float = 0.90,
-    w_img: float = 0.10,
-) -> List[str]:
-    preds = []
-    missing_images = 0
-
-    for _, row in df_pred.iterrows():
-        article = str(row.get("article_body", "") or "")
-        titles = get_titles(row)
-
-        text_scores = cross_encoder_ranker.score_titles(article, titles)
-
-        img_path = find_image_path(images_dir, row.get("image_hash", ""))
-        if img_path is None:
-            missing_images += 1
-            order = np.argsort(-text_scores)
-            preds.append(" ".join([TOKENS_ALL[i] for i in order]))
-            continue
-
-        img_scores = vlm_logits_image_vs_titles(
-            vlm_model=vlm_model,
-            vlm_processor=vlm_processor,
-            device=device,
-            image_path=img_path,
-            titles=titles,
-            backend=backend,
-        )
-
-        text01 = minmax_01(text_scores)
-        img01 = minmax_01(img_scores)
-
-        final_scores = (w_text * text01) + (w_img * img01)
-
-        order = np.argsort(-final_scores)
-        preds.append(" ".join([TOKENS_ALL[i] for i in order]))
-
-    if missing_images:
-        print(f"[WARN] Missing images for {missing_images} rows. Used text-only fallback.")
-
-    return preds
+def predict_task2_vlm_plus_bm25(*args, **kwargs):
+    raise RuntimeError(
+        "predict_task2_vlm_plus_bm25 está obsoleto. Usa "
+        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+    )
 
 
-def predict_task2_crossencoder_plus_clip(
-    df_pred: pd.DataFrame,
-    images_dir: Path,
-    cross_encoder_ranker,
-    clip_model: CLIPModel,
-    clip_processor: CLIPProcessor,
-    device: str,
-    w_text: float = 0.90,
-    w_img: float = 0.10,
-) -> List[str]:
-    return predict_task2_crossencoder_plus_vlm(
-        df_pred=df_pred,
-        images_dir=images_dir,
-        cross_encoder_ranker=cross_encoder_ranker,
-        vlm_model=clip_model,
-        vlm_processor=clip_processor,
-        device=device,
-        backend="clip",
-        w_text=w_text,
-        w_img=w_img,
+def predict_task2_semantic_plus_vlm(*args, **kwargs):
+    raise RuntimeError(
+        "predict_task2_semantic_plus_vlm está obsoleto. Usa "
+        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+    )
+
+
+def predict_task2_vlm_plus_tfidf(*args, **kwargs):
+    raise RuntimeError(
+        "predict_task2_vlm_plus_tfidf está obsoleto. Usa "
+        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+    )
+
+
+def predict_task2_crossencoder_plus_clip(*args, **kwargs):
+    raise RuntimeError(
+        "predict_task2_crossencoder_plus_clip está obsoleto. Usa "
+        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+    )
+
+
+def predict_task2_semantic_plus_clip(*args, **kwargs):
+    raise RuntimeError(
+        "predict_task2_semantic_plus_clip está obsoleto. Usa "
+        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
     )
