@@ -52,8 +52,20 @@ def _resolve_torch_dtype(dtype_name: str):
     raise ValueError(f"torch_dtype no soportado para LLM: {dtype_name}")
 
 
+def _repair_common_json_errors(text: str) -> str:
+    # Repara casos tipo {"id": 2, 0} -> {"id": 2, "score": 0}
+    text = re.sub(
+        r'(\{"id"\s*:\s*\d+\s*,\s*)(-?\d+(?:\.\d+)?)\s*\}',
+        r'\1"score": \2}',
+        text,
+    )
+    return text
+
+
 def _extract_json_object(text: str) -> Optional[dict]:
     text = str(text or "").strip()
+    text = _repair_common_json_errors(text)
+
     candidates = [text]
 
     fenced = re.findall(
@@ -197,9 +209,10 @@ class LLMRanker:
 
         Instrucciones:
         - Evalúa TODOS los titulares candidatos.
-        - Devuelve EXACTAMENTE un score para cada id mostrado.
+        - Cada elemento debe tener SIEMPRE las dos claves: "id" y "score".
         - No omitas ningún id.
         - Los ids deben ser los mismos que aparecen en la lista de candidatos.
+        - Nunca escribas objetos como {"id": 2, 0}; siempre debe ser {"id": 2, "score": 0}.
         - Puntúa cada titular de 0 a 10.
         - 10 = mismo evento/noticia, mismos actores principales y mismo contexto.
         - 7-9 = muy relacionado, aunque falte algún detalle.
