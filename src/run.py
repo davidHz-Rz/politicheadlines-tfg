@@ -54,6 +54,7 @@ from config import (
     USE_VLM_FOR_TASK2,
     VLM_BACKEND,
     get_cross_encoder_runtime_config,
+    get_cross_encoder_rank10_runtime_config,
     get_modern_reranker_runtime_config,
     get_vlm_model_name,
 )
@@ -70,6 +71,7 @@ from models.tfidf_ranker import TfidfRanker, build_tfidf_corpus
 from models.bm25_ranker import BM25Ranker, build_bm25_corpus
 from models.semantic_ranker import SemanticRanker
 from models.cross_encoder_ranker import CrossEncoderConfig, CrossEncoderRanker
+from models.cross_encoder_rank10_ranker import CrossEncoderRank10Config, CrossEncoderRank10Ranker
 from models.cross_encoder_ensemble_ranker import CrossEncoderEnsembleRanker, EnsembleMember
 from models.llm_ranker import LLMEnsembleRanker, LLMRanker, LLMRankerConfig
 from models.modern_reranker import ModernReranker, ModernRerankerPipeline
@@ -89,6 +91,22 @@ def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
         use_amp=cfg["use_amp"],
     )
     return CrossEncoderRanker.load(str(cfg["model_dir"]), config)
+
+
+def build_crossencoder_rank10_ranker(model_key: str = "bert_rank10") -> CrossEncoderRank10Ranker:
+    cfg = get_cross_encoder_rank10_runtime_config(model_key)
+    config = CrossEncoderRank10Config(
+        model_name=str(cfg["model_name"]),
+        max_length=cfg["max_length"],
+        batch_size=cfg["batch_size"],
+        gradient_accumulation_steps=cfg.get("gradient_accumulation_steps", 1),
+        learning_rate=cfg["learning_rate"],
+        epochs=cfg["epochs"],
+        weight_decay=cfg["weight_decay"],
+        warmup_ratio=cfg["warmup_ratio"],
+        use_amp=cfg["use_amp"],
+    )
+    return CrossEncoderRank10Ranker.load(str(cfg["model_dir"]), config)
 
 
 def build_crossencoder_ensemble_ranker() -> CrossEncoderEnsembleRanker:
@@ -132,6 +150,12 @@ def build_base_ranker(model_key: str, train_df: pd.DataFrame):
         print(f"Cargando cross-encoder entrenado: {model_key}...")
         ranker = build_crossencoder_ranker(model_key)
         print(f"Dispositivo {model_key}: {ranker.device}")
+        return ranker
+
+    if model_key == "bert_rank10":
+        print("Cargando cross-encoder rank10 entrenado...")
+        ranker = build_crossencoder_rank10_ranker("bert_rank10")
+        print(f"Dispositivo bert_rank10: {ranker.device}")
         return ranker
 
     raise ValueError(f"Ranker base no soportado: {model_key}")

@@ -25,7 +25,7 @@ DATASET_DIR = DATA_DIR / ACTIVE_DATASET
 # ============================================================
 
 TRAIN_CSV = DATASET_DIR / "train_public.csv"
-TEST_CSV = DATASET_DIR / "test_public.csv"   # dev_public.csv (metrics) / test_public.csv (submission)
+TEST_CSV = DATASET_DIR / "dev_public.csv"   # dev_public.csv (metrics) / test_public.csv (submission)
 IMAGES_DIR = DATASET_DIR / "images"
 
 # ============================================================
@@ -43,7 +43,8 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "llm_ranker"
 # - "modern_reranker"
 # - "tail_reranker"
-MODEL_NAME = "tail_reranker"
+# - "bert_rank10"
+MODEL_NAME = "bert_rank10"
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
 # ============================================================
@@ -62,6 +63,7 @@ TRAINING_OUTPUTS_DIR = OUTPUTS_DIR / "training"
 BERT_MODEL_DIR = OUTPUTS_DIR / "bert_model"
 BERTIN_MODEL_DIR = OUTPUTS_DIR / "bertin_model"
 MDEBERTA_MODEL_DIR = OUTPUTS_DIR / "mdeberta_model"
+BERT_RANK10_MODEL_DIR = OUTPUTS_DIR / "bert_rank10_model"
 
 # ============================================================
 # Configuración de cross-encoders
@@ -100,6 +102,27 @@ CROSS_ENCODER_CONFIGS = {
         "gradient_accumulation_steps": 1,
         "learning_rate": 2e-5,
         "epochs": 2,
+        "weight_decay": 0.01,
+        "warmup_ratio": 0.1,
+        "use_amp": True,
+    },
+}
+
+# ============================================================
+# Cross-encoder para ranking completo (rank10)
+# ============================================================
+
+# Inicializa desde el checkpoint BETO ya entrenado si existe.
+# Si no existe, cambia model_name a "dccuchile/bert-base-spanish-wwm-cased".
+CROSS_ENCODER_RANK10_CONFIGS = {
+    "bert_rank10": {
+        "model_name": BERT_MODEL_DIR,
+        "model_dir": BERT_RANK10_MODEL_DIR,
+        "max_length": 512,
+        "batch_size": 16,
+        "gradient_accumulation_steps": 1,
+        "learning_rate": 1e-5,
+        "epochs": 1,
         "weight_decay": 0.01,
         "warmup_ratio": 0.1,
         "use_amp": True,
@@ -207,6 +230,12 @@ def get_cross_encoder_runtime_config(model_key: str) -> dict:
     return dict(CROSS_ENCODER_CONFIGS[model_key])
 
 
+def get_cross_encoder_rank10_runtime_config(model_key: str) -> dict:
+    if model_key not in CROSS_ENCODER_RANK10_CONFIGS:
+        raise ValueError(f"Modelo cross-encoder rank10 no soportado: {model_key}")
+    return dict(CROSS_ENCODER_RANK10_CONFIGS[model_key])
+
+
 def get_cross_encoder_model_dir(model_key: str) -> Path:
     return Path(get_cross_encoder_runtime_config(model_key)["model_dir"])
 
@@ -310,5 +339,5 @@ def get_modern_reranker_runtime_config(model_key: str) -> dict:
 # Tail reranker
 # ============================================================
 TAIL_RERANKER_BASE_RANKER = "crossencoder_ensemble"
-TAIL_RERANKER_AUX_RANKER = "bm25"   # bm25, tfidf, semantic, bge
+TAIL_RERANKER_AUX_RANKER = "bert_rank10"   # bm25, tfidf, semantic, bge, bert_rank10
 TAIL_RERANKER_TOP_K = 10
