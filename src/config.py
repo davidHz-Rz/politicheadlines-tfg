@@ -25,7 +25,7 @@ DATASET_DIR = DATA_DIR / ACTIVE_DATASET
 # ============================================================
 
 TRAIN_CSV = DATASET_DIR / "train_public.csv"
-TEST_CSV = DATASET_DIR / "dev_public.csv"   # dev_public.csv (metrics) / test_public.csv (submission)
+TEST_CSV = DATASET_DIR / "test_public.csv"   # dev_public.csv (metrics) / test_public.csv (submission)
 IMAGES_DIR = DATASET_DIR / "images"
 
 # ============================================================
@@ -41,7 +41,9 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "mdeberta"
 # - "crossencoder_ensemble"
 # - "llm_ranker"
-MODEL_NAME = "llm_ranker"
+# - "modern_reranker"
+# - "tail_reranker"
+MODEL_NAME = "tail_reranker"
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
 # ============================================================
@@ -137,7 +139,7 @@ MDEBERTA_USE_AMP = CROSS_ENCODER_CONFIGS["mdeberta"]["use_amp"]
 
 
 # ============================================================
-# COnfiguración ensemble
+# Configuración ensemble
 # ============================================================
 
 CROSS_ENCODER_ENSEMBLE_MEMBERS = [
@@ -260,3 +262,53 @@ LLM_DO_SAMPLE = False
 LLM_LOAD_IN_4BIT = True
 LLM_TORCH_DTYPE = "auto"
 LLM_TRUST_REMOTE_CODE = False
+
+# ============================================================
+# Configuración Modern Reranker (solo BGE)
+# ============================================================
+
+# Para usarlo:
+# MODEL_NAME = "tail_reranker"
+
+MODERN_RERANKER_MODEL_KEY = "bge_reranker_v2_m3"
+
+MODERN_RERANKER_CONFIGS = {
+    "bge_reranker_v2_m3": {
+        "model_name": "BAAI/bge-reranker-v2-m3",
+        "max_length": 256,
+        "batch_size": 8,
+        "use_fp16": True,
+    },
+}
+
+# Modos:
+# "solo"        -> BGE puntúa los 10 titulares
+# "ensemble"    -> combina ranker base + BGE
+# "rerank"      -> reordena top-k del ranker base
+# "rerank_tail" -> mantiene top1 y reordena 2..k
+MODERN_RERANKER_MODE = "solo"
+
+# Ranker base para ensemble / rerank
+# Opciones:
+# crossencoder_ensemble, bert, bertin, mdeberta, bm25, tfidf, semantic
+MODERN_RERANKER_BASE_RANKER = "crossencoder_ensemble"
+
+# Para rerank / rerank_tail
+MODERN_RERANKER_TOP_K = 10
+
+# Para ensemble
+MODERN_RERANKER_BASE_WEIGHT = 0.90
+MODERN_RERANKER_WEIGHT = 0.10
+
+
+def get_modern_reranker_runtime_config(model_key: str) -> dict:
+    if model_key not in MODERN_RERANKER_CONFIGS:
+        raise ValueError(f"Reranker moderno no soportado: {model_key}")
+    return dict(MODERN_RERANKER_CONFIGS[model_key])
+
+# ============================================================
+# Tail reranker
+# ============================================================
+TAIL_RERANKER_BASE_RANKER = "crossencoder_ensemble"
+TAIL_RERANKER_AUX_RANKER = "bm25"   # bm25, tfidf, semantic, bge
+TAIL_RERANKER_TOP_K = 10

@@ -36,6 +36,15 @@ from config import (
     LLM_TRUST_REMOTE_CODE,
     LLM_WEIGHT,
     MODEL_NAME,
+    MODERN_RERANKER_BASE_RANKER,
+    MODERN_RERANKER_BASE_WEIGHT,
+    MODERN_RERANKER_MODE,
+    MODERN_RERANKER_MODEL_KEY,
+    MODERN_RERANKER_TOP_K,
+    MODERN_RERANKER_WEIGHT,
+    TAIL_RERANKER_BASE_RANKER,
+    TAIL_RERANKER_AUX_RANKER,
+    TAIL_RERANKER_TOP_K,
     NDCG_K,
     OUTPUT_METRICS,
     OUTPUT_SUBMISSION,
@@ -45,6 +54,7 @@ from config import (
     USE_VLM_FOR_TASK2,
     VLM_BACKEND,
     get_cross_encoder_runtime_config,
+    get_modern_reranker_runtime_config,
     get_vlm_model_name,
 )
 from utils.data_utils import get_source_text_task1, get_titles, validate_columns
@@ -62,6 +72,8 @@ from models.semantic_ranker import SemanticRanker
 from models.cross_encoder_ranker import CrossEncoderConfig, CrossEncoderRanker
 from models.cross_encoder_ensemble_ranker import CrossEncoderEnsembleRanker, EnsembleMember
 from models.llm_ranker import LLMEnsembleRanker, LLMRanker, LLMRankerConfig
+from models.modern_reranker import ModernReranker, ModernRerankerPipeline
+from models.tail_reranker import TailReranker
 
 
 def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
@@ -155,12 +167,62 @@ def build_llm_ranker(train_df: pd.DataFrame):
     )
 
 
+def build_modern_reranker(train_df: pd.DataFrame):
+    cfg = get_modern_reranker_runtime_config(MODERN_RERANKER_MODEL_KEY)
+    print(f"Cargando reranker moderno: {MODERN_RERANKER_MODEL_KEY} ({cfg['model_name']})")
+    print(f"Modo reranker moderno: {MODERN_RERANKER_MODE}")
+
+    reranker = ModernReranker(
+        model_name=cfg["model_name"],
+        max_length=cfg["max_length"],
+        batch_size=cfg["batch_size"],
+        use_fp16=cfg.get("use_fp16", True),
+    )
+    print(f"Dispositivo reranker moderno: {reranker.device}")
+
+    if MODERN_RERANKER_MODE.lower().strip() == "solo":
+        return ModernRerankerPipeline(
+            reranker=reranker,
+            base_ranker=None,
+            mode="solo",
+        )
+
+    base_ranker = build_base_ranker(MODERN_RERANKER_BASE_RANKER, train_df=train_df)
+
+    return ModernRerankerPipeline(
+        reranker=reranker,
+        base_ranker=base_ranker,
+        mode=MODERN_RERANKER_MODE,
+        base_weight=MODERN_RERANKER_BASE_WEIGHT,
+        reranker_weight=MODERN_RERANKER_WEIGHT,
+        rerank_top_k=MODERN_RERANKER_TOP_K,
+    )
+
+
+
+
+def build_tail_reranker(train_df: pd.DataFrame):
+    print("Cargando tail reranker...")
+    base_ranker = build_base_ranker(TAIL_RERANKER_BASE_RANKER, train_df=train_df)
+    aux = TAIL_RERANKER_AUX_RANKER.lower().strip()
+    if aux == "bge":
+        tail_ranker = ModernReranker()
+    else:
+        tail_ranker = build_base_ranker(aux, train_df=train_df)
+    return TailReranker(base_ranker, tail_ranker, top_k=TAIL_RERANKER_TOP_K)
+
 def build_ranker(model_name: str, train_df: pd.DataFrame):
     """Construye el ranker textual principal seleccionado en config.py."""
     model_name = model_name.lower().strip()
 
     if model_name == "llm_ranker":
         return build_llm_ranker(train_df=train_df)
+
+    if model_name == "modern_reranker":
+        return build_modern_reranker(train_df=train_df)
+
+    if model_name == "tail_reranker":
+        return build_tail_reranker(train_df=train_df)
 
     return build_base_ranker(model_name, train_df=train_df)
 
