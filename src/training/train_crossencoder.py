@@ -39,7 +39,7 @@ def main(model_key: str | None = None) -> None:
     print(f"Número de pares dev: {len(dev_examples) if dev_examples is not None else 0}")
 
     ranker_config = CrossEncoderConfig(
-        model_name=cfg["model_name"],
+        model_name=str(cfg["model_name"]),
         max_length=cfg["max_length"],
         batch_size=cfg["batch_size"],
         gradient_accumulation_steps=cfg.get("gradient_accumulation_steps", 1),
@@ -48,6 +48,9 @@ def main(model_key: str | None = None) -> None:
         weight_decay=cfg["weight_decay"],
         warmup_ratio=cfg["warmup_ratio"],
         use_amp=cfg["use_amp"],
+        use_head_tail=cfg.get("use_head_tail", False),
+        head_tokens=cfg.get("head_tokens", 384),
+        tail_tokens=cfg.get("tail_tokens", 125),
     )
 
     print("Inicializando modelo...")

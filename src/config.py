@@ -37,6 +37,7 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "semantic"
 # - "bm25"
 # - "bert"
+# - "bert_headtail"
 # - "bertin"
 # - "mdeberta"
 # - "crossencoder_ensemble"
@@ -44,7 +45,7 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "modern_reranker"
 # - "tail_reranker"
 # - "bert_rank10"
-MODEL_NAME = "bert_rank10"
+MODEL_NAME = "tail_reranker"
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
 # ============================================================
@@ -61,6 +62,7 @@ TRAINING_OUTPUTS_DIR = OUTPUTS_DIR / "training"
 # ============================================================
 
 BERT_MODEL_DIR = OUTPUTS_DIR / "bert_model"
+BERT_HEADTAIL_MODEL_DIR = OUTPUTS_DIR / "bert_headtail_model"
 BERTIN_MODEL_DIR = OUTPUTS_DIR / "bertin_model"
 MDEBERTA_MODEL_DIR = OUTPUTS_DIR / "mdeberta_model"
 BERT_RANK10_MODEL_DIR = OUTPUTS_DIR / "bert_rank10_model"
@@ -81,6 +83,21 @@ CROSS_ENCODER_CONFIGS = {
         "weight_decay": 0.01,
         "warmup_ratio": 0.1,
         "use_amp": True,
+    },
+    "bert_headtail": {
+        "model_name": BERT_MODEL_DIR,
+        "model_dir": BERT_HEADTAIL_MODEL_DIR,
+        "max_length": 512,
+        "batch_size": 32,
+        "gradient_accumulation_steps": 1,
+        "learning_rate": 1e-5,
+        "epochs": 1,
+        "weight_decay": 0.01,
+        "warmup_ratio": 0.1,
+        "use_amp": True,
+        "use_head_tail": True,
+        "head_tokens": 384,
+        "tail_tokens": 125,
     },
     "bertin": {
         "model_name": "bertin-project/bertin-roberta-base-spanish",
@@ -338,6 +355,6 @@ def get_modern_reranker_runtime_config(model_key: str) -> dict:
 # ============================================================
 # Tail reranker
 # ============================================================
-TAIL_RERANKER_BASE_RANKER = "crossencoder_ensemble"
+TAIL_RERANKER_BASE_RANKER = "bert_headtail"
 TAIL_RERANKER_AUX_RANKER = "bert_rank10"   # bm25, tfidf, semantic, bge, bert_rank10
 TAIL_RERANKER_TOP_K = 10

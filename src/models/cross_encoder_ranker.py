@@ -27,8 +27,8 @@ def get_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _should_use_slow_tokenizer(model_name_or_path: str) -> bool:
-    name = model_name_or_path.lower()
+def _should_use_slow_tokenizer(model_name_or_path: str | Path) -> bool:
+    name = str(model_name_or_path).lower()
     return "deberta" in name
 
 
@@ -38,6 +38,41 @@ def extract_positive_index(row: pd.Series, y_true_col: str = "y_true") -> int:
         raise ValueError("Fila sin y_true válido.")
     top_token = y_true_tokens[0]
     return int(top_token[1:]) - 1
+
+
+def build_head_tail_text(
+    text: str,
+    tokenizer,
+    head_tokens: int = 384,
+    tail_tokens: int = 125,
+    max_article_tokens: int | None = None,
+) -> str:
+    """Construye una version head+tail del articulo ajustada al espacio real."""
+    text = "" if text is None else str(text)
+    if not text:
+        return text
+
+    tokens = tokenizer.tokenize(text)
+
+    if max_article_tokens is None:
+        max_article_tokens = head_tokens + tail_tokens
+    max_article_tokens = max(1, int(max_article_tokens))
+
+    if len(tokens) <= max_article_tokens:
+        return text
+
+    requested = max(1, head_tokens + tail_tokens)
+    if requested <= max_article_tokens:
+        head_budget = min(head_tokens, max_article_tokens)
+        tail_budget = max_article_tokens - head_budget
+    else:
+        head_budget = int(round(max_article_tokens * (head_tokens / requested)))
+        head_budget = min(max(head_budget, 1), max_article_tokens)
+        tail_budget = max_article_tokens - head_budget
+
+    head = tokens[:head_budget]
+    tail = tokens[-tail_budget:] if tail_budget > 0 else []
+    return tokenizer.convert_tokens_to_string(head + tail)
 
 
 def build_pair_examples(df: pd.DataFrame, y_true_col: str = "y_true") -> List[Tuple[str, str, int]]:
@@ -82,6 +117,9 @@ class CrossEncoderConfig:
     weight_decay: float = 0.01
     warmup_ratio: float = 0.1
     use_amp: bool = True
+    use_head_tail: bool = False
+    head_tokens: int = 384
+    tail_tokens: int = 125
 
 
 class CrossEncoderRanker:
@@ -107,9 +145,29 @@ class CrossEncoderRanker:
         self.model = self.model.float()
         self.model = self.model.to(self.device)
 
+    def _article_token_budget(self, title: str) -> int:
+        # [CLS] article [SEP] title [SEP] => margen de 3 tokens especiales.
+        title_tokens = self.tokenizer.tokenize("" if title is None else str(title))
+        return max(1, self.config.max_length - len(title_tokens) - 3)
+
+    def _prepare_article_for_title(self, article: str, title: str) -> str:
+        if not self.config.use_head_tail:
+            return article
+
+        return build_head_tail_text(
+            article,
+            tokenizer=self.tokenizer,
+            head_tokens=self.config.head_tokens,
+            tail_tokens=self.config.tail_tokens,
+            max_article_tokens=self._article_token_budget(title),
+        )
+
     def _collate_fn(self, batch):
-        articles = [item["article"] for item in batch]
         titles = [item["title"] for item in batch]
+        articles = [
+            self._prepare_article_for_title(item["article"], item["title"])
+            for item in batch
+        ]
         labels = torch.tensor([item["labels"] for item in batch], dtype=torch.long)
 
         enc = self.tokenizer(
@@ -339,7 +397,10 @@ class CrossEncoderRanker:
         use_amp = self.config.use_amp and self.device == "cuda"
 
         with torch.no_grad():
-            articles = [article] * len(titles)
+            articles = [
+                self._prepare_article_for_title(article, title)
+                for title in titles
+            ]
             enc = self.tokenizer(
                 articles,
                 titles,

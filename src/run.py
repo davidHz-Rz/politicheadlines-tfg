@@ -81,7 +81,7 @@ from models.tail_reranker import TailReranker
 def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
     cfg = get_cross_encoder_runtime_config(model_key)
     config = CrossEncoderConfig(
-        model_name=cfg["model_name"],
+        model_name=str(cfg["model_name"]),
         max_length=cfg["max_length"],
         batch_size=cfg["batch_size"],
         learning_rate=cfg["learning_rate"],
@@ -89,6 +89,9 @@ def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
         weight_decay=cfg["weight_decay"],
         warmup_ratio=cfg["warmup_ratio"],
         use_amp=cfg["use_amp"],
+        use_head_tail=cfg.get("use_head_tail", False),
+        head_tokens=cfg.get("head_tokens", 384),
+        tail_tokens=cfg.get("tail_tokens", 125),
     )
     return CrossEncoderRanker.load(str(cfg["model_dir"]), config)
 
@@ -146,7 +149,7 @@ def build_base_ranker(model_key: str, train_df: pd.DataFrame):
         print("Miembros ensemble:", CROSS_ENCODER_ENSEMBLE_MEMBERS)
         return build_crossencoder_ensemble_ranker()
 
-    if model_key in {"bert", "bertin", "mdeberta"}:
+    if model_key in {"bert", "bert_headtail", "bertin", "mdeberta"}:
         print(f"Cargando cross-encoder entrenado: {model_key}...")
         ranker = build_crossencoder_ranker(model_key)
         print(f"Dispositivo {model_key}: {ranker.device}")
