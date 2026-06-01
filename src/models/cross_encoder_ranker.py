@@ -14,7 +14,8 @@ from transformers.optimization import get_linear_schedule_with_warmup
 
 from config import FORCE_CPU, TOKENS_ALL
 from utils.data_utils import get_source_text_task1, get_titles
-from utils.metrics import parse_rank_list, score_task1_predictions_df
+from utils.data_pairs import build_pairs, extract_positive_index
+from utils.metrics import score_task1_predictions_df
 
 
 DEFAULT_MODEL_NAME = "dccuchile/bert-base-spanish-wwm-cased"
@@ -32,14 +33,6 @@ def _should_use_slow_tokenizer(model_name_or_path: str | Path) -> bool:
     return "deberta" in name
 
 
-def extract_positive_index(row: pd.Series, y_true_col: str = "y_true") -> int:
-    y_true_tokens = parse_rank_list(row[y_true_col])
-    if not y_true_tokens:
-        raise ValueError("Fila sin y_true válido.")
-    top_token = y_true_tokens[0]
-    return int(top_token[1:]) - 1
-
-
 def build_head_tail_text(
     text: str,
     tokenizer,
@@ -47,7 +40,18 @@ def build_head_tail_text(
     tail_tokens: int = 125,
     max_article_tokens: int | None = None,
 ) -> str:
-    """Construye una version head+tail del articulo ajustada al espacio real."""
+    """
+    Construye una versión head+tail del artículo respetando el presupuesto real
+    de tokens disponible para el artículo.
+
+    El presupuesto debe calcularse fuera teniendo en cuenta:
+    - max_length del modelo,
+    - tokens del titular,
+    - tokens especiales del par ([CLS], [SEP], [SEP] o equivalentes).
+
+    head_tokens y tail_tokens se usan como proporción deseada. Si su suma no cabe
+    en max_article_tokens, se reescalan manteniendo aproximadamente la proporción.
+    """
     text = "" if text is None else str(text)
     if not text:
         return text
@@ -56,38 +60,31 @@ def build_head_tail_text(
 
     if max_article_tokens is None:
         max_article_tokens = head_tokens + tail_tokens
+
     max_article_tokens = max(1, int(max_article_tokens))
 
     if len(tokens) <= max_article_tokens:
         return text
 
-    requested = max(1, head_tokens + tail_tokens)
-    if requested <= max_article_tokens:
-        head_budget = min(head_tokens, max_article_tokens)
+    requested_tokens = max(1, int(head_tokens) + int(tail_tokens))
+
+    if requested_tokens <= max_article_tokens:
+        head_budget = min(int(head_tokens), max_article_tokens)
         tail_budget = max_article_tokens - head_budget
     else:
-        head_budget = int(round(max_article_tokens * (head_tokens / requested)))
+        head_ratio = int(head_tokens) / requested_tokens
+        head_budget = int(round(max_article_tokens * head_ratio))
         head_budget = min(max(head_budget, 1), max_article_tokens)
         tail_budget = max_article_tokens - head_budget
 
     head = tokens[:head_budget]
     tail = tokens[-tail_budget:] if tail_budget > 0 else []
+
     return tokenizer.convert_tokens_to_string(head + tail)
 
 
-def build_pair_examples(df: pd.DataFrame, y_true_col: str = "y_true") -> List[Tuple[str, str, int]]:
-    examples = []
-
-    for _, row in df.iterrows():
-        article = get_source_text_task1(row)
-        titles = get_titles(row)
-        positive_idx = extract_positive_index(row, y_true_col=y_true_col)
-
-        for i, title in enumerate(titles):
-            label = 1 if i == positive_idx else 0
-            examples.append((article, title, label))
-
-    return examples
+# Alias conservado por compatibilidad con scripts anteriores.
+build_pair_examples = build_pairs
 
 
 class PairDataset(Dataset):
@@ -120,6 +117,9 @@ class CrossEncoderConfig:
     use_head_tail: bool = False
     head_tokens: int = 384
     tail_tokens: int = 125
+    early_stopping_patience: int | None = 3
+    early_stopping_min_delta: float = 0.0005
+    early_stopping_monitor: str = "task_1_pa_ndcg"
 
 
 class CrossEncoderRanker:
@@ -146,9 +146,17 @@ class CrossEncoderRanker:
         self.model = self.model.to(self.device)
 
     def _article_token_budget(self, title: str) -> int:
-        # [CLS] article [SEP] title [SEP] => margen de 3 tokens especiales.
+        """
+        Calcula cuántos tokens pueden dedicarse al artículo dentro del par
+        artículo-titular.
+
+        El tokenizer añadirá tokens especiales automáticamente, por lo que aquí
+        se reserva espacio para ellos usando la API del tokenizer en vez de fijar
+        manualmente el valor a 3.
+        """
         title_tokens = self.tokenizer.tokenize("" if title is None else str(title))
-        return max(1, self.config.max_length - len(title_tokens) - 3)
+        special_tokens = self.tokenizer.num_special_tokens_to_add(pair=True)
+        return max(1, self.config.max_length - len(title_tokens) - special_tokens)
 
     def _prepare_article_for_title(self, article: str, title: str) -> str:
         if not self.config.use_head_tail:
@@ -256,17 +264,22 @@ class CrossEncoderRanker:
 
         best_score = float("-inf")
         best_epoch = None
+        epochs_without_improvement = 0
 
         self.model.train()
         print(f"Dispositivo: {self.device}")
         print(f"AMP activado: {use_amp}")
         print("Model dtype:", next(self.model.parameters()).dtype)
         print(f"Gradient accumulation steps: {self.config.gradient_accumulation_steps}")
+        print(f"Early stopping patience: {self.config.early_stopping_patience}")
+        print(f"Early stopping min_delta: {self.config.early_stopping_min_delta}")
+        print(f"Early stopping monitor: {self.config.early_stopping_monitor}")
 
         optimizer.zero_grad(set_to_none=True)
 
         for epoch in range(self.config.epochs):
             total_loss = 0.0
+            stop_training = False
 
             for batch_idx, batch in enumerate(train_loader, start=1):
                 batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
@@ -336,19 +349,51 @@ class CrossEncoderRanker:
                 print(
                     f"Epoch {epoch + 1} | "
                     f"task_1_pa_ndcg = {metrics['task_1_pa_ndcg']:.6f} | "
-                    f"top1_acc = {metrics['top1_acc']:.6f}"
+                    f"top1_accuracy = {metrics['top1_accuracy']:.6f}"
                 )
 
-                if metrics["task_1_pa_ndcg"] > best_score:
-                    best_score = metrics["task_1_pa_ndcg"]
+                monitor_name = self.config.early_stopping_monitor
+                current_score = metrics.get(monitor_name)
+                if current_score is None:
+                    raise KeyError(
+                        f"Métrica de early stopping no encontrada: {monitor_name!r}. "
+                        f"Métricas disponibles: {sorted(metrics.keys())}"
+                    )
+
+                improvement = current_score - best_score
+                if improvement > self.config.early_stopping_min_delta:
+                    best_score = current_score
                     best_epoch = epoch + 1
+                    epochs_without_improvement = 0
                     if save_root is not None:
                         self.save(str(save_root))
                         print(f"Nuevo mejor checkpoint guardado en: {save_root}")
+                else:
+                    epochs_without_improvement += 1
+                    print(
+                        f"Sin mejora suficiente en {monitor_name}: "
+                        f"actual={current_score:.6f}, mejor={best_score:.6f}, "
+                        f"delta={improvement:.6f}, "
+                        f"paciencia={epochs_without_improvement}/"
+                        f"{self.config.early_stopping_patience}"
+                    )
+
+                    if (
+                        self.config.early_stopping_patience is not None
+                        and epochs_without_improvement >= self.config.early_stopping_patience
+                    ):
+                        stop_training = True
 
             self.training_history.append(history_entry)
             if save_root is not None:
                 self._save_training_history(save_root, best_epoch=best_epoch, best_score=best_score)
+
+            if stop_training:
+                print(
+                    f"Early stopping activado en epoch {epoch + 1}. "
+                    f"Mejor epoch: {best_epoch}, mejor {self.config.early_stopping_monitor}: {best_score:.6f}"
+                )
+                break
 
         if save_root is not None:
             last_dir = save_root / "last_checkpoint"
@@ -365,6 +410,12 @@ class CrossEncoderRanker:
         history_path = output_dir / "training_history.json"
         with open(history_path, "w", encoding="utf-8") as f:
             json.dump(history_payload, f, indent=2, ensure_ascii=False)
+
+        if self.training_history:
+            pd.DataFrame(self.training_history).to_csv(
+                output_dir / "training_history.csv",
+                index=False,
+            )
 
     def evaluate_loss(self, examples: List[Tuple[str, str, int]]) -> float:
         loader = self._make_loader(examples, shuffle=False)

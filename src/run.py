@@ -84,6 +84,7 @@ def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
         model_name=str(cfg["model_name"]),
         max_length=cfg["max_length"],
         batch_size=cfg["batch_size"],
+        gradient_accumulation_steps=cfg.get("gradient_accumulation_steps", 1),
         learning_rate=cfg["learning_rate"],
         epochs=cfg["epochs"],
         weight_decay=cfg["weight_decay"],
@@ -226,16 +227,22 @@ def build_modern_reranker(train_df: pd.DataFrame):
     )
 
 
-
-
 def build_tail_reranker(train_df: pd.DataFrame):
     print("Cargando tail reranker...")
     base_ranker = build_base_ranker(TAIL_RERANKER_BASE_RANKER, train_df=train_df)
+
     aux = TAIL_RERANKER_AUX_RANKER.lower().strip()
     if aux == "bge":
-        tail_ranker = ModernReranker()
+        cfg = get_modern_reranker_runtime_config(MODERN_RERANKER_MODEL_KEY)
+        tail_ranker = ModernReranker(
+            model_name=cfg["model_name"],
+            max_length=cfg["max_length"],
+            batch_size=cfg["batch_size"],
+            use_fp16=cfg.get("use_fp16", True),
+        )
     else:
         tail_ranker = build_base_ranker(aux, train_df=train_df)
+
     return TailReranker(base_ranker, tail_ranker, top_k=TAIL_RERANKER_TOP_K)
 
 def build_ranker(model_name: str, train_df: pd.DataFrame):
@@ -273,6 +280,14 @@ def score_dataframe_with_ranker(
         article = get_source_text_task1(row)
         titles = get_titles(row)
         scores = np.asarray(ranker.score_titles(article, titles), dtype=float)
+
+        if len(scores) != len(titles):
+            raise ValueError(
+                f"El ranker devolvió {len(scores)} scores para {len(titles)} títulos "
+                f"en la fila {idx}."
+            )
+        if not np.all(np.isfinite(scores)):
+            raise ValueError(f"El ranker devolvió scores no finitos en la fila {idx}.")
 
         scores_cache.append(scores)
         preds.append(ranking_from_scores(scores))

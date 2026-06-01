@@ -64,12 +64,31 @@ def build_rank10_examples(
         n = len(y_true_tokens)
 
         for pos, token in enumerate(y_true_tokens):
-            idx = int(token[1:]) - 1
+            if not isinstance(token, str) or not token.startswith("t"):
+                raise ValueError(f"Token y_true inválido: {token!r}")
+
+            try:
+                idx = int(token[1:]) - 1
+            except ValueError as exc:
+                raise ValueError(f"Token y_true inválido: {token!r}") from exc
+
+            if idx < 0 or idx >= len(titles):
+                raise ValueError(
+                    f"Índice fuera de rango en y_true: {token!r}. "
+                    f"Número de titulares: {len(titles)}"
+                )
+            if idx in relevance_by_idx:
+                raise ValueError(f"Token duplicado en y_true: {token!r}")
+
             relevance = float(n - pos)
             if normalize:
                 # Primero = 1.0, último = 0.1 si n=10.
                 relevance = relevance / float(n)
             relevance_by_idx[idx] = relevance
+
+        missing = set(range(len(titles))) - set(relevance_by_idx)
+        if missing:
+            raise ValueError(f"Faltan candidatos en y_true: {sorted(missing)}")
 
         for idx, title in enumerate(titles):
             examples.append((article, title, relevance_by_idx[idx]))
@@ -104,6 +123,9 @@ class CrossEncoderRank10Config:
     weight_decay: float = 0.01
     warmup_ratio: float = 0.1
     use_amp: bool = True
+    early_stopping_patience: int | None = 3
+    early_stopping_min_delta: float = 0.0005
+    early_stopping_monitor: str = "task_1_pa_ndcg"
 
 
 class CrossEncoderRank10Ranker:
@@ -222,17 +244,22 @@ class CrossEncoderRank10Ranker:
 
         best_score = float("-inf")
         best_epoch = None
+        epochs_without_improvement = 0
 
         print(f"Dispositivo: {self.device}")
         print(f"AMP activado: {use_amp}")
         print("Model dtype:", next(self.model.parameters()).dtype)
         print(f"Gradient accumulation steps: {self.config.gradient_accumulation_steps}")
+        print(f"Early stopping patience: {self.config.early_stopping_patience}")
+        print(f"Early stopping min_delta: {self.config.early_stopping_min_delta}")
+        print(f"Early stopping monitor: {self.config.early_stopping_monitor}")
 
         optimizer.zero_grad(set_to_none=True)
 
         for epoch in range(self.config.epochs):
             self.model.train()
             total_loss = 0.0
+            stop_training = False
 
             for batch_idx, batch in enumerate(train_loader, start=1):
                 batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
@@ -297,19 +324,52 @@ class CrossEncoderRank10Ranker:
                 print(
                     f"Epoch {epoch + 1} | "
                     f"task_1_pa_ndcg = {metrics['task_1_pa_ndcg']:.6f} | "
-                    f"top1_acc = {metrics['top1_acc']:.6f}"
+                    f"top1_accuracy = {metrics['top1_accuracy']:.6f}"
                 )
 
-                if metrics["task_1_pa_ndcg"] > best_score:
-                    best_score = metrics["task_1_pa_ndcg"]
+                monitor_name = self.config.early_stopping_monitor
+                current_score = metrics.get(monitor_name)
+                if current_score is None:
+                    raise KeyError(
+                        f"Métrica de early stopping no encontrada: {monitor_name!r}. "
+                        f"Métricas disponibles: {sorted(metrics.keys())}"
+                    )
+
+                improvement = current_score - best_score
+                if improvement > self.config.early_stopping_min_delta:
+                    best_score = current_score
                     best_epoch = epoch + 1
+                    epochs_without_improvement = 0
                     if save_root is not None:
                         self.save(str(save_root))
                         print(f"Nuevo mejor checkpoint guardado en: {save_root}")
+                else:
+                    epochs_without_improvement += 1
+                    print(
+                        f"Sin mejora suficiente en {monitor_name}: "
+                        f"actual={current_score:.6f}, mejor={best_score:.6f}, "
+                        f"delta={improvement:.6f}, "
+                        f"paciencia={epochs_without_improvement}/"
+                        f"{self.config.early_stopping_patience}"
+                    )
+
+                    if (
+                        self.config.early_stopping_patience is not None
+                        and epochs_without_improvement >= self.config.early_stopping_patience
+                    ):
+                        stop_training = True
 
             self.training_history.append(history_entry)
             if save_root is not None:
                 self._save_training_history(save_root, best_epoch, best_score)
+                
+            if stop_training:
+                print(
+                    f"Early stopping activado en epoch {epoch + 1}. "
+                    f"Mejor epoch: {best_epoch}, "
+                    f"mejor {self.config.early_stopping_monitor}: {best_score:.6f}"
+                )
+                break
 
         if save_root is not None:
             last_dir = save_root / "last_checkpoint"
@@ -398,6 +458,12 @@ class CrossEncoderRank10Ranker:
         }
         with open(output_dir / "training_history.json", "w", encoding="utf-8") as f:
             json.dump(history_payload, f, indent=2, ensure_ascii=False)
+
+        if self.training_history:
+            pd.DataFrame(self.training_history).to_csv(
+                output_dir / "training_history.csv",
+                index=False,
+            )
 
     @classmethod
     def load(cls, model_dir: str, config: CrossEncoderRank10Config):

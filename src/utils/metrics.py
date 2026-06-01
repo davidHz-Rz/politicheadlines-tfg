@@ -192,7 +192,16 @@ def score_submission(
         "alpha": alpha,
     }
 
-def score_task1_predictions_df(df_val: pd.DataFrame, task_1_preds: List[str], y_true_col: str = "y_true") -> Dict[str, float]:
+def score_task1_predictions_df(
+    df_val: pd.DataFrame,
+    task_1_preds: List[str],
+    y_true_col: str = "y_true",
+) -> Dict[str, float]:
+    """Evalúa predicciones de Task 1 sobre un dataframe con y_true.
+
+    Devuelve PA-nDCG y accuracy top-1. Se mantiene el alias
+    ``top1_acc`` por compatibilidad con código anterior.
+    """
     if y_true_col not in df_val.columns:
         raise ValueError(f"No se encontró la columna '{y_true_col}' para evaluar.")
 
@@ -211,7 +220,10 @@ def score_task1_predictions_df(df_val: pd.DataFrame, task_1_preds: List[str], y_
             top1_hits += 1
 
     n = max(len(task_1_preds), 1)
+    top1_accuracy = float(top1_hits / n)
+
     return {
         "task_1_pa_ndcg": float(sum(scores) / n),
-        "top1_acc": float(top1_hits / n),
+        "top1_accuracy": top1_accuracy,
+        "top1_acc": top1_accuracy,
     }
