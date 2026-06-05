@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 
 from config import FORCE_CPU, TOKENS_ALL
@@ -151,10 +151,15 @@ class CrossEncoderRank10Ranker:
             tokenizer_kwargs["use_fast"] = False
 
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name, **tokenizer_kwargs)
+        model_config = AutoConfig.from_pretrained(config.model_name)
+        model_config.num_labels = 1
+        model_config.problem_type = "regression"
+        model_config.id2label = {0: "relevance"}
+        model_config.label2id = {"relevance": 0}
+        
         self.model = AutoModelForSequenceClassification.from_pretrained(
             config.model_name,
-            num_labels=1,
-            problem_type="regression",
+            config=model_config,
             ignore_mismatched_sizes=True,
         )
         self.model = self.model.float().to(self.device)

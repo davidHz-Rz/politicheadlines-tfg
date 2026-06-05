@@ -48,7 +48,7 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "modern_reranker"
 # - "tail_reranker"
 # - "bert_rank10"
-MODEL_NAME = "bert_headtail"
+MODEL_NAME = "bert"
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
 RUN_NAME = MODEL_NAME
@@ -92,7 +92,7 @@ CROSS_ENCODER_CONFIGS = {
         "model_name": "dccuchile/bert-base-spanish-wwm-cased",
         "model_dir": BERT_MODEL_DIR,
         "max_length": 512,
-        "batch_size": 4,
+        "batch_size": 64,
         "gradient_accumulation_steps": 1,
         "learning_rate": 2e-5,
         "epochs": 10,
@@ -107,7 +107,7 @@ CROSS_ENCODER_CONFIGS = {
         "model_name": BERT_MODEL_DIR,
         "model_dir": BERT_HEADTAIL_MODEL_DIR,
         "max_length": 512,
-        "batch_size": 32,
+        "batch_size": 64,
         "gradient_accumulation_steps": 1,
         "learning_rate": 1e-5,
         "epochs": 5,
@@ -125,7 +125,7 @@ CROSS_ENCODER_CONFIGS = {
         "model_name": "bertin-project/bertin-roberta-base-spanish",
         "model_dir": BERTIN_MODEL_DIR,
         "max_length": 512,
-        "batch_size": 16,
+        "batch_size": 64,
         "gradient_accumulation_steps": 1,
         "learning_rate": 2e-5,
         "epochs": 10,
@@ -165,7 +165,7 @@ CROSS_ENCODER_RANK10_CONFIGS = {
         "model_name": BERT_MODEL_DIR,
         "model_dir": BERT_RANK10_MODEL_DIR,
         "max_length": 512,
-        "batch_size": 16,
+        "batch_size": 32,
         "gradient_accumulation_steps": 1,
         "learning_rate": 1e-5,
         "epochs": 10,
@@ -204,7 +204,7 @@ BM25_QUERY_TERM_LIMIT = 512
 # 10. Task 2: configuración multimodal
 # ============================================================
 
-USE_VLM_FOR_TASK2 = True
+USE_VLM_FOR_TASK2 = False
 TEXT_WEIGHT = 0.90
 IMAGE_WEIGHT = 0.10
 
@@ -263,7 +263,7 @@ MODERN_RERANKER_CONFIGS = {
     "bge_reranker_v2_m3": {
         "model_name": "BAAI/bge-reranker-v2-m3",
         "max_length": 256,
-        "batch_size": 8,
+        "batch_size": 32,
         "use_fp16": True,
     },
 }
