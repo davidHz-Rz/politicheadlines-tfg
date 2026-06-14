@@ -212,7 +212,7 @@ class LLMRanker:
         - Cada elemento debe tener SIEMPRE las dos claves: "id" y "score".
         - No omitas ningún id.
         - Los ids deben ser los mismos que aparecen en la lista de candidatos.
-        - Nunca escribas objetos como {"id": 2, 0}; siempre debe ser {"id": 2, "score": 0}.
+        - Nunca escribas objetos como {{"id": 2, 0}}; siempre debe ser {{"id": 2, "score": 0}}.
         - Puntúa cada titular de 0 a 10.
         - 10 = mismo evento/noticia, mismos actores principales y mismo contexto.
         - 7-9 = muy relacionado, aunque falte algún detalle.
