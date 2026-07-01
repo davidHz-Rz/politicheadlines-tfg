@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 """
-Main inference and evaluation pipelina for the PoliticHeadlineES project
+Main inference and evaluation pipeline for the PoliticHeadlinES project
 
-This scrip loads the dataset, builds or loads the tanking model, generates
+This script loads the dataset, builds or loads the ranking model, generates
 predictions for task 1, applies multimodal fusion for task 2 if active, saves
 the submission file with the rankings, and computes local metrics if golden
 labels are available.
@@ -305,7 +305,7 @@ def build_tail_reranker(train_df: pd.DataFrame):
 
 def build_ranker(model_name: str, train_df: pd.DataFrame):
     """
-    Calls the correspondant build function depending on the model selected.
+    Calls the corresponding builder function depending on the model selected.
     """
     model_name = model_name.lower().strip()
 
@@ -362,7 +362,7 @@ def score_dataframe_with_ranker(
                 f"in the row {idx}."
             )
         if not np.all(np.isfinite(scores)):
-            raise ValueError(f"The ranker returned non ending scores in the row {idx}.")
+            raise ValueError(f"The ranker returned non-finite scores in the row {idx}.")
 
         scores_cache.append(scores)
         preds.append(ranking_from_scores(scores))
