@@ -1,8 +1,14 @@
+"""
+Global configuration for the PoliticHeadlinES project.
+
+It covers paths, dataset selection, model selection, training and inference parameters,
+ensemble weights, reranking settings, multimodal and auxiliar functions for the
+executions as well. 
+"""
+
 from pathlib import Path
 
-# ============================================================
-# 1. Rutas base
-# ============================================================
+# ROOTS
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
@@ -10,19 +16,12 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 TRAINING_OUTPUTS_DIR = OUTPUTS_DIR / "training"
 
 
-# ============================================================
-# 2. Dataset activo
-# ============================================================
+# ACTIVE DATASET
 
-# Opciones antiguas:
-# - "development_phase_initial"
-# - "train_corpora"
-# - "test_public"
-#
-# Opcion actual (dataset particionado):
-# - "tfg_split"
-# Nota: la organización de estos CSV se revisará en la fase de particionado.
-ACTIVE_DATASET = "tfg_split"
+# The current version uses a data split made for further experimentation for
+# the TFG. Original competition files follow similar structure.
+
+ACTIVE_DATASET = "tfg_split" # Name of the folder
 DATASET_DIR = DATA_DIR / ACTIVE_DATASET
 
 TRAIN_CSV = DATASET_DIR / "train.csv"
@@ -31,34 +30,33 @@ TEST_CSV = DATASET_DIR / "test.csv"
 IMAGES_DIR = DATASET_DIR / "images"
 
 
-# ============================================================
-# 3. Selección de ejecución
-# ============================================================
+# EXECUTION SELECTION
 
-# Opciones:
+# Main model used by src/run.py. Options:
 # - "tfidf"
 # - "semantic"
 # - "bm25"
-# - "bert"
-# - "bert_headtail"
+# - "bert"                               CHANGE
+# - "bert_headtail"                      CHANGE
 # - "bertin"
 # - "mdeberta"
 # - "crossencoder_ensemble"
 # - "llm_ranker"
-# - "modern_reranker"
+# - "modern_reranker"                    CHANGE
 # - "tail_reranker"
-# - "bert_rank10"
+# - "bert_rank10"                        CHANGE
 MODEL_NAME = "bert"
+
+# Kept for compatibility with older scripts. CHANGE
 ACTIVE_CROSS_ENCODER = MODEL_NAME
 
-RUN_NAME = MODEL_NAME
+# Prefix used to name output files
+RUN_NAME = MODEL_NAME # CAN BE REMOVED
 OUTPUT_SUBMISSION = OUTPUTS_DIR / f"{RUN_NAME}_results.csv"
 OUTPUT_METRICS = OUTPUTS_DIR / f"{RUN_NAME}_metrics.json"
 
 
-# ============================================================
-# 4. Columnas, evaluación y parámetros generales
-# ============================================================
+# MAIN PARAMETERS FOR THE DATASET AND EVALUATION
 
 TITLE_COLS = [f"title_{i}" for i in range(1, 11)]
 TOKENS_ALL = [f"t{i}" for i in range(1, 11)]
@@ -69,26 +67,27 @@ ALPHA = 0.9
 N_COLS = 10
 
 SEED = 42
-FORCE_CPU = False
+FORCE_CPU = False # Forces the execution to be done by the CPU instead of GPU
 
 
-# ============================================================
-# 5. Directorios de modelos entrenados
-# ============================================================
+# FOLDERS FOR THE TRAINED MODELS
 
-BERT_MODEL_DIR = OUTPUTS_DIR / "bert_model"
-BERT_HEADTAIL_MODEL_DIR = OUTPUTS_DIR / "bert_headtail_model"
+BERT_MODEL_DIR = OUTPUTS_DIR / "bert_model"                         # CHANGE
+BERT_HEADTAIL_MODEL_DIR = OUTPUTS_DIR / "bert_headtail_model"       # CHANGE
 BERTIN_MODEL_DIR = OUTPUTS_DIR / "bertin_model"
 MDEBERTA_MODEL_DIR = OUTPUTS_DIR / "mdeberta_model"
-BERT_RANK10_MODEL_DIR = OUTPUTS_DIR / "bert_rank10_model"
+BERT_RANK10_MODEL_DIR = OUTPUTS_DIR / "bert_rank10_model"           # CHANGE
 
 
-# ============================================================
-# 6. Cross-encoders pointwise
-# ============================================================
+# POINTWISE CROSSENCODER CONFIGURATIONS
+
+# BINARY TRAINED MODELS
+
+# beto_headtail takes part of the end of the article instead of truncating only
+# from the beginning
 
 CROSS_ENCODER_CONFIGS = {
-    "bert": {
+    "bert": {                                                       # CHANGE
         "model_name": "dccuchile/bert-base-spanish-wwm-cased",
         "model_dir": BERT_MODEL_DIR,
         "max_length": 512,
@@ -103,7 +102,7 @@ CROSS_ENCODER_CONFIGS = {
         "early_stopping_min_delta": 0.0005,
         "early_stopping_monitor": "task_1_pa_ndcg",
     },
-    "bert_headtail": {
+    "bert_headtail": {                                                       # CHANGE
         "model_name": BERT_MODEL_DIR,
         "model_dir": BERT_HEADTAIL_MODEL_DIR,
         "max_length": 512,
@@ -118,7 +117,7 @@ CROSS_ENCODER_CONFIGS = {
         "early_stopping_min_delta": 0.0005,
         "early_stopping_monitor": "task_1_pa_ndcg",
         "use_head_tail": True,
-        "head_tokens": 384,
+        "head_tokens": 384, # Proportion, not exaact number of tokens
         "tail_tokens": 125,
     },
     "bertin": {
@@ -154,12 +153,11 @@ CROSS_ENCODER_CONFIGS = {
 }
 
 
-# ============================================================
-# 7. Cross-encoder para ranking completo (rank10)
-# ============================================================
+# BETO RANK10 CONFIGURATION
 
-# Inicializa desde el checkpoint BETO ya entrenado si existe.
-# Si no existe, cambia model_name a "dccuchile/bert-base-spanish-wwm-cased".
+# It is trained to rank the whole list of candidates, not only the first one
+# like the binary trained models
+
 CROSS_ENCODER_RANK10_CONFIGS = {
     "bert_rank10": {
         "model_name": BERT_MODEL_DIR,
@@ -179,71 +177,73 @@ CROSS_ENCODER_RANK10_CONFIGS = {
 }
 
 
-# ============================================================
-# 8. Ensemble textual
-# ============================================================
+# TEXTUAL ENSEMBLE WEIGHTS
+
+# Each member produces one relevance score per candidate article. Then, they
+# are combined linearly using the weights below. After sorting the list with
+# those new values the new ranking is obtained
 
 CROSS_ENCODER_ENSEMBLE_MEMBERS = [
-    ("bert", 0.70),
-    ("bertin", 0.30),
+    ("bert_headtail", 0.40),
+    ("bert", 0.45),
+    ("mdeberta", 0.15)
 ]
 
 
-# ============================================================
-# 9. Baselines léxicos
-# ============================================================
+# LEXICAL BASELINES CONFIGURATION
 
 BM25_K1 = 1.75
 BM25_B = 0.5
-# Limita los términos de query del artículo a los más informativos.
-# Usa None para emplear todos los términos del artículo.
+# Limits the amount of terms used. Use None to use no limit
 BM25_QUERY_TERM_LIMIT = 512
 
 
-# ============================================================
-# 10. Task 2: configuración multimodal
-# ============================================================
+# MULTIMODAL SETTINGS
 
-USE_VLM_FOR_TASK2 = False
+USE_VLM_FOR_TASK2 = True 
 TEXT_WEIGHT = 0.90
 IMAGE_WEIGHT = 0.10
 
-# Backends soportados:
-# - "clip"
-# - "siglip"
+# Supported models are:
+# - clip
+# - siglip
+# Change SIGLIP_MODEL_NAME to use siglip2
 VLM_BACKEND = "siglip"
 
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-SIGLIP_MODEL_NAME = "google/siglip2-base-patch16-224"  # siglip-base-patch16-224, siglip2-base-patch16-224, siglip-base-patch16-384
+SIGLIP_MODEL_NAME = "google/siglip2-base-patch16-224"  # siglip-base-patch16-224, siglip2-base-patch16-224
 
-# Compatibilidad con el código anterior
+# Compatibility with older scripts. REMOVE WHEN POSSIBLE
 USE_CLIP_FOR_TASK2 = USE_VLM_FOR_TASK2
 
 
-# ============================================================
-# 11. Configuración LLM ranker
-# ============================================================
+# LLMs CONFIGURATION
 
-# Para usarlo, poner MODEL_NAME = "llm_ranker".
-# Modelos recomendados:
+# Recommended models:
 # - "Qwen/Qwen2.5-7B-Instruct"
 # - "meta-llama/Llama-3.1-8B-Instruct"
 LLM_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 
-# Modos:
-# - "solo": usa únicamente el LLM como ranker textual.
-# - "ensemble": combina score base + score LLM.
-# - "rerank": genera ranking base y reordena el top-k con LLM.
+# Modes:
+# - "solo": evaluates the LLM as an individual text ranker.
+# - "ensemble": combines the LLM with other textual model. Possible with previous ensembles
+# - "rerank": uses the llm as a reranker over another model or ensemble
 LLM_RANKER_MODE = "solo"
 
-# Ranker base para "ensemble" o "rerank".
-# Soportado: "crossencoder_ensemble", "bert", "bertin", "mdeberta", "bm25", "semantic".
+# Model selection for ensemble or rerank mode
+# Supported: 
+# - "crossencoder_ensemble"
+# - "bert"
+# - "bertin"
+# - "mdeberta"
+# - "bm25"
+# - "semantic"
 LLM_BASE_RANKER = "crossencoder_ensemble"
 LLM_RERANK_TOP_K = 10
 LLM_BASE_WEIGHT = 0.85
 LLM_WEIGHT = 0.15
 
-# Inferencia LLM.
+# Main LLM parameters
 LLM_MAX_INPUT_CHARS = 3500
 LLM_MAX_NEW_TOKENS = 512
 LLM_TEMPERATURE = 0.0
@@ -253,9 +253,7 @@ LLM_TORCH_DTYPE = "auto"
 LLM_TRUST_REMOTE_CODE = False
 
 
-# ============================================================
-# 12. Configuración Modern Reranker (BGE)
-# ============================================================
+# MODERN RERANKER (BGE) SETTINGS
 
 MODERN_RERANKER_MODEL_KEY = "bge_reranker_v2_m3"
 
@@ -268,37 +266,29 @@ MODERN_RERANKER_CONFIGS = {
     },
 }
 
-# Modos:
-# "solo"        -> BGE puntúa los 10 titulares
-# "ensemble"    -> combina ranker base + BGE
-# "rerank"      -> reordena top-k del ranker base
-# "rerank_tail" -> mantiene top1 y reordena 2..k
+# Modess (same as LLMs, but can be used as a tail reranker too):             REVIEW and delete unnecessary modes (at least tail reranking)
+# "solo", "ensemble", "rerank", "rerank_tail"
 MODERN_RERANKER_MODE = "solo"
 
-# Ranker base para ensemble / rerank
-# Opciones: crossencoder_ensemble, bert, bertin, mdeberta, bm25, tfidf, semantic
+# Base ranker selection for ensemble/reranking mode
+# Supported models: crossencoder_ensemble, bert, bertin, mdeberta, bm25, tfidf, semantic
 MODERN_RERANKER_BASE_RANKER = "crossencoder_ensemble"
 
-# Para rerank / rerank_tail
+
 MODERN_RERANKER_TOP_K = 10
 
-# Para ensemble
 MODERN_RERANKER_BASE_WEIGHT = 0.90
 MODERN_RERANKER_WEIGHT = 0.10
 
 
-# ============================================================
-# 13. Tail reranker
-# ============================================================
+# TAIL RERANKING CONFIGUTARION
 
 TAIL_RERANKER_BASE_RANKER = "crossencoder_ensemble"
 TAIL_RERANKER_AUX_RANKER = "bert_rank10"  # bm25, tfidf, semantic, bge, bert_rank10
 TAIL_RERANKER_TOP_K = 10
 
 
-# ============================================================
-# 14. Compatibilidad con código existente
-# ============================================================
+# BACKWARDS COMPATIBILITY (REMOVE WHEN POSSIBLE)
 
 BERT_MODEL_NAME = CROSS_ENCODER_CONFIGS["bert"]["model_name"]
 BERT_MAX_LENGTH = CROSS_ENCODER_CONFIGS["bert"]["max_length"]
@@ -331,33 +321,41 @@ MDEBERTA_WARMUP_RATIO = CROSS_ENCODER_CONFIGS["mdeberta"]["warmup_ratio"]
 MDEBERTA_USE_AMP = CROSS_ENCODER_CONFIGS["mdeberta"]["use_amp"]
 
 
-# ============================================================
-# 15. Helpers de configuración
-# ============================================================
+# HELPER FUNCTIONS
 
 def get_cross_encoder_runtime_config(model_key: str) -> dict:
+    """
+    Return a copy of the runtime configuration for a pointwise cross-encoder.
+
+    Parameters
+    ----------
+    model_key : str
+        Identifier of the cross.encoder configuration.
+
+    Raises
+    ------
+    ValueError
+        If key is not registered.
+
+    Returns
+    -------
+    dict
+        Copy of the selected configuration dictionary.
+
+    """
     if model_key not in CROSS_ENCODER_CONFIGS:
-        raise ValueError(f"Modelo cross-encoder no soportado: {model_key}")
+        raise ValueError(f"Cross-encoder model not supported: {model_key}")
     return dict(CROSS_ENCODER_CONFIGS[model_key])
 
 
 def get_cross_encoder_rank10_runtime_config(model_key: str) -> dict:
     if model_key not in CROSS_ENCODER_RANK10_CONFIGS:
-        raise ValueError(f"Modelo cross-encoder rank10 no soportado: {model_key}")
+        raise ValueError(f"Cross-encoder rank10 model not supported: {model_key}")
     return dict(CROSS_ENCODER_RANK10_CONFIGS[model_key])
 
 
 def get_cross_encoder_model_dir(model_key: str) -> Path:
     return Path(get_cross_encoder_runtime_config(model_key)["model_dir"])
-
-
-def get_vlm_model_name() -> str:
-    backend = VLM_BACKEND.lower().strip()
-    if backend == "clip":
-        return CLIP_MODEL_NAME
-    if backend == "siglip":
-        return SIGLIP_MODEL_NAME
-    raise ValueError(f"VLM_BACKEND no soportado: {VLM_BACKEND}")
 
 
 def get_modern_reranker_runtime_config(model_key: str) -> dict:
@@ -366,7 +364,37 @@ def get_modern_reranker_runtime_config(model_key: str) -> dict:
     return dict(MODERN_RERANKER_CONFIGS[model_key])
 
 
+def get_vlm_model_name() -> str:
+    """
+    Resolve the Huggin Face model name associated with the selected VLM backend.
+
+    Raises
+    ------
+    ValueError
+        If VLM_BACKEND is not one of the supported backends.
+
+    Returns
+    -------
+    str
+        Model identifier for the selected backend
+
+    """
+    backend = VLM_BACKEND.lower().strip()
+    if backend == "clip":
+        return CLIP_MODEL_NAME
+    if backend == "siglip":
+        return SIGLIP_MODEL_NAME
+    raise ValueError(f"VLM_BACKEND nnot supported: {VLM_BACKEND}")
+
+
+
 def print_config() -> None:
+    """
+    Print the most relevant active configuration values.
+    
+    Useful for debugging and verifying the used dataset, model and output paths
+    before running any experiment.
+    """
     print("PROJECT_ROOT:", PROJECT_ROOT)
     print("ACTIVE_DATASET:", ACTIVE_DATASET)
     print("MODEL_NAME:", MODEL_NAME)
