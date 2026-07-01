@@ -19,7 +19,8 @@ TRAINING_OUTPUTS_DIR = OUTPUTS_DIR / "training"
 # ACTIVE DATASET
 
 # The current version uses a data split made for further experimentation for
-# the TFG. Original competition files follow similar structure.
+# the TFG. Original competition files followed similar structure and are 
+# compatible.
 
 ACTIVE_DATASET = "tfg_split" # Name of the folder
 DATASET_DIR = DATA_DIR / ACTIVE_DATASET

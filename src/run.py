@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+"""
+Main inference and evaluation pipelina for the PoliticHeadlineES project
+
+This scrip loads the dataset, builds or loads the tanking model, generates
+predictions for task 1, applies multimodal fusion for task 2 if active, saves
+the submission file with the rankings, and computes local metrics if golden
+labels are available.
+
+Model selection and other parameters are defined in config.py.
+"""
+
 import json
 from pathlib import Path
 import sys
-from typing import List, Sequence, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -79,6 +90,13 @@ from models.tail_reranker import TailReranker
 
 
 def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
+    """
+    Load a trained pointwise cross-encoder ranker.
+
+    The selected configuration is read from config.py. The model scores each
+    article-title pair independently, and the final ranking is obtained by
+    sorting the ten candidate headlines by their predicted relevance score.
+    """
     cfg = get_cross_encoder_runtime_config(model_key)
     config = CrossEncoderConfig(
         model_name=str(cfg["model_name"]),
@@ -98,6 +116,12 @@ def build_crossencoder_ranker(model_key: str) -> CrossEncoderRanker:
 
 
 def build_crossencoder_rank10_ranker(model_key: str = "bert_rank10") -> CrossEncoderRank10Ranker:
+    """
+    Load the rank10 cross-encoder.
+
+    Unlike the pointwise cross-encoders, this model is intended to score or
+    refine the complete set of ten candidate headlines for an article.
+    """
     cfg = get_cross_encoder_rank10_runtime_config(model_key)
     config = CrossEncoderRank10Config(
         model_name=str(cfg["model_name"]),
@@ -114,6 +138,12 @@ def build_crossencoder_rank10_ranker(model_key: str = "bert_rank10") -> CrossEnc
 
 
 def build_crossencoder_ensemble_ranker() -> CrossEncoderEnsembleRanker:
+    """
+    Build the weighted soft-voting ensemble of trained cross-encoders.
+
+    Each ensemble member produces one score per candidate headline. Scores are
+    combined linearly according to the weights defined in config.py.
+    """
     members = [
         EnsembleMember(model_key=name, weight=weight)
         for name, weight in CROSS_ENCODER_ENSEMBLE_MEMBERS
@@ -122,17 +152,25 @@ def build_crossencoder_ensemble_ranker() -> CrossEncoderEnsembleRanker:
 
 
 def build_base_ranker(model_key: str, train_df: pd.DataFrame):
-    """Construye un ranker textual base con interfaz score_titles(article, titles)."""
+    """
+    Build one of the base textual rankers.
+
+    All returned rankers follow the same interface:
+    score_titles(article: str, titles: list[str]) -> list[float]
+
+    This shared interface allows the rest of the pipeline to treat lexical,
+    semantic and neural models in the same way.
+    """
     model_key = model_key.lower().strip()
 
     if model_key == "tfidf":
-        print("Cargando TF-IDF...")
+        print("Loading TF-IDF...")
         ranker = TfidfRanker()
         ranker.fit(build_tfidf_corpus(train_df))
         return ranker
 
     if model_key == "bm25":
-        print("Cargando BM25...")
+        print("Loading BM25...")
         ranker = BM25Ranker(
             k1=BM25_K1,
             b=BM25_B,
@@ -142,32 +180,39 @@ def build_base_ranker(model_key: str, train_df: pd.DataFrame):
         return ranker
 
     if model_key == "semantic":
-        print("Cargando Semantic Ranker...")
+        print("Loading Semantic Ranker...")
         return SemanticRanker()
 
     if model_key == "crossencoder_ensemble":
-        print("Cargando ensemble de cross-encoders...")
-        print("Miembros ensemble:", CROSS_ENCODER_ENSEMBLE_MEMBERS)
+        print("Loading cross-encoders ensemble...")
+        print("Ensemble members:", CROSS_ENCODER_ENSEMBLE_MEMBERS)
         return build_crossencoder_ensemble_ranker()
 
     if model_key in {"bert", "bert_headtail", "bertin", "mdeberta"}:
-        print(f"Cargando cross-encoder entrenado: {model_key}...")
+        print(f"Loading trained cross-encoder: {model_key}...")
         ranker = build_crossencoder_ranker(model_key)
-        print(f"Dispositivo {model_key}: {ranker.device}")
+        print(f"Device {model_key}: {ranker.device}")
         return ranker
 
     if model_key == "bert_rank10":
-        print("Cargando cross-encoder rank10 entrenado...")
+        print("Loading trained rank10 cross-encoder...")
         ranker = build_crossencoder_rank10_ranker("bert_rank10")
-        print(f"Dispositivo bert_rank10: {ranker.device}")
+        print(f"Device bert_rank10: {ranker.device}")
         return ranker
 
-    raise ValueError(f"Ranker base no soportado: {model_key}")
+    raise ValueError(f"Base ranker not supported: {model_key}")
 
 
 def build_llm_ranker(train_df: pd.DataFrame):
-    print(f"Cargando LLM ranker: {LLM_MODEL_NAME}")
-    print(f"Modo LLM: {LLM_RANKER_MODE}")
+    """
+    Build the experimental LLM-based ranker.
+
+    Depending on the configured mode, the LLM can be used as a standalone
+    ranker, combined with a base ranker, or used to rerank the top-k candidates
+    produced by another model.
+    """
+    print(f"Loading LLM ranker: {LLM_MODEL_NAME}")
+    print(f"LLM mode: {LLM_RANKER_MODE}")
 
     llm_config = LLMRankerConfig(
         model_name=LLM_MODEL_NAME,
@@ -196,9 +241,15 @@ def build_llm_ranker(train_df: pd.DataFrame):
 
 
 def build_modern_reranker(train_df: pd.DataFrame):
+    """
+    Build the experimental BGE reranker pipeline.
+
+    The reranker can operate alone, as a weighted ensemble with a base ranker,
+    or as a top-k reranker over a previous ranking.
+    """
     cfg = get_modern_reranker_runtime_config(MODERN_RERANKER_MODEL_KEY)
-    print(f"Cargando reranker moderno: {MODERN_RERANKER_MODEL_KEY} ({cfg['model_name']})")
-    print(f"Modo reranker moderno: {MODERN_RERANKER_MODE}")
+    print(f"Loading modern reranker: {MODERN_RERANKER_MODEL_KEY} ({cfg['model_name']})")
+    print(f"Modern reranker mode: {MODERN_RERANKER_MODE}")
 
     reranker = ModernReranker(
         model_name=cfg["model_name"],
@@ -206,7 +257,7 @@ def build_modern_reranker(train_df: pd.DataFrame):
         batch_size=cfg["batch_size"],
         use_fp16=cfg.get("use_fp16", True),
     )
-    print(f"Dispositivo reranker moderno: {reranker.device}")
+    print(f"Modern reranker device: {reranker.device}")
 
     if MODERN_RERANKER_MODE.lower().strip() == "solo":
         return ModernRerankerPipeline(
@@ -216,7 +267,6 @@ def build_modern_reranker(train_df: pd.DataFrame):
         )
 
     base_ranker = build_base_ranker(MODERN_RERANKER_BASE_RANKER, train_df=train_df)
-
     return ModernRerankerPipeline(
         reranker=reranker,
         base_ranker=base_ranker,
@@ -228,7 +278,14 @@ def build_modern_reranker(train_df: pd.DataFrame):
 
 
 def build_tail_reranker(train_df: pd.DataFrame):
-    print("Cargando tail reranker...")
+    """
+    Build a tail reranking pipeline.
+
+    The base ranker first produces an initial ranking. Then an auxiliary ranker
+    is applied to refine the lower part or full top-k ranking, depending on the
+    configured strategy.
+    """
+    print("Loading tail reranker...")
     base_ranker = build_base_ranker(TAIL_RERANKER_BASE_RANKER, train_df=train_df)
 
     aux = TAIL_RERANKER_AUX_RANKER.lower().strip()
@@ -245,8 +302,11 @@ def build_tail_reranker(train_df: pd.DataFrame):
 
     return TailReranker(base_ranker, tail_ranker, top_k=TAIL_RERANKER_TOP_K)
 
+
 def build_ranker(model_name: str, train_df: pd.DataFrame):
-    """Construye el ranker textual principal seleccionado en config.py."""
+    """
+    Calls the correspondant build function depending on the model selected.
+    """
     model_name = model_name.lower().strip()
 
     if model_name == "llm_ranker":
@@ -267,11 +327,26 @@ def score_dataframe_with_ranker(
     progress_every: int = 10,
 ) -> Tuple[List[str], List[np.ndarray]]:
     """
-    Calcula scores textuales una sola vez.
+    Score all rows in a dataframe with the selected textual ranker.
 
-    Devuelve:
-    - preds: rankings para Task 1.
-    - scores_cache: scores por fila para reutilizar en Task 2.
+    For each article, the ranker produces one score for each of the ten
+    candidate headlines. Scores are converted into a token ranking for Task 1
+    and also cached so they can be reused later for Task 2 multimodal fusion.
+
+    Parameters
+    ----------
+    ranker:
+        Ranking model implementing score_titles(article, titles).
+    df_pred:
+        Dataframe containing article text and candidate headline columns.
+    progress_every:
+        Number of rows between progress messages. If set to 0 or None,
+        progress messages are disabled.
+
+    Returns
+    -------
+    tuple[list[str], list[np.ndarray]]
+        Task 1 ranking predictions and raw textual scores per row.
     """
     preds: List[str] = []
     scores_cache: List[np.ndarray] = []
@@ -283,23 +358,32 @@ def score_dataframe_with_ranker(
 
         if len(scores) != len(titles):
             raise ValueError(
-                f"El ranker devolvió {len(scores)} scores para {len(titles)} títulos "
-                f"en la fila {idx}."
+                f"The ranker returned {len(scores)} scores for {len(titles)} headlines "
+                f"in the row {idx}."
             )
         if not np.all(np.isfinite(scores)):
-            raise ValueError(f"El ranker devolvió scores no finitos en la fila {idx}.")
+            raise ValueError(f"The ranker returned non ending scores in the row {idx}.")
 
         scores_cache.append(scores)
         preds.append(ranking_from_scores(scores))
 
         if progress_every and idx % progress_every == 0:
-            print(f"Predichas Task 1 {idx}/{len(df_pred)} filas...")
+            print(f"Predicted Task 1 {idx}/{len(df_pred)} rows...")
 
     return preds, scores_cache
 
 
 def main() -> None:
-    print("Cargando datos...")
+    """
+    Execute the full configured pipeline.
+
+    The function loads train/test data, validates the expected columns, builds
+    the selected ranker, generates Task 1 predictions, optionally generates
+    multimodal Task 2 predictions, saves the submission and evaluates it when
+    ground truth labels are available.
+    """
+    # DATA LOAD
+    print("Loading data...")
     train_df = pd.read_csv(TRAIN_CSV)
     test_df = pd.read_csv(TEST_CSV)
 
@@ -308,29 +392,24 @@ def main() -> None:
 
     print(f"Train rows: {len(train_df)}")
     print(f"Test rows: {len(test_df)}")
-    print(f"Modelo: {MODEL_NAME}")
+    print(f"Model: {MODEL_NAME}")
 
-    # ---------------------------------------------------------
-    # Ranker textual: se calcula una vez y se reutiliza.
-    # ---------------------------------------------------------
+    # Textual model (task 1)
     ranker = build_ranker(MODEL_NAME, train_df=train_df)
 
-    print(f"Generando predicciones para Task 1 ({MODEL_NAME})...")
+    print(f"Generating predictions for Task 1 ({MODEL_NAME})...")
     task_1_preds, text_scores_cache = score_dataframe_with_ranker(ranker, test_df)
 
-    # ---------------------------------------------------------
-    # Task 2: si hay VLM, solo calcula señal visual y fusiona con
-    # scores textuales cacheados. No recalcula el ranker textual.
-    # ---------------------------------------------------------
+    # Visual model addition if enabled (task 2)
     if USE_VLM_FOR_TASK2:
         vlm_name = get_vlm_model_name()
-        print(f"Cargando modelo {VLM_BACKEND.upper()}: {vlm_name}...")
+        print(f"Loading mode {VLM_BACKEND.upper()}: {vlm_name}...")
         vlm_model, vlm_processor, device = load_vlm()
-        print(f"Dispositivo {VLM_BACKEND.upper()}: {device}")
+        print(f"Device {VLM_BACKEND.upper()}: {device}")
 
         print(
-            f"Generando predicciones para Task 2 "
-            f"({MODEL_NAME} cacheado + {VLM_BACKEND.upper()})..."
+            f"Generating predictions for task 2 "
+            f"({MODEL_NAME} loaded from cache + {VLM_BACKEND.upper()})..."
         )
         task_2_preds = predict_task2_vlm_plus_text_scores(
             df_pred=test_df,
@@ -344,13 +423,12 @@ def main() -> None:
             w_img=IMAGE_WEIGHT,
         )
     else:
-        print("USE_VLM_FOR_TASK2 = False. Usando Task 1 como Task 2.")
+        print("USE_VLM_FOR_TASK2 = False. Reusing task 1 scores for task 2.")
         task_2_preds = task_1_preds
 
-    # ---------------------------------------------------------
-    # Submission
-    # ---------------------------------------------------------
-    print("Construyendo submission...")
+    # SUBMISSION
+    
+    print("Building submission file...")
     submission = build_submission(
         ids=test_df["id"].astype(str),
         task_1_preds=task_1_preds,
@@ -366,9 +444,8 @@ def main() -> None:
 
     print(submission.head())
 
-    # ---------------------------------------------------------
-    # Evaluación local
-    # ---------------------------------------------------------
+    # LOCAL EVALUATION
+    
     if "y_true" in test_df.columns:
         print("Evaluando submission...")
         scores = score_submission(
