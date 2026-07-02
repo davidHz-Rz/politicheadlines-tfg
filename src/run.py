@@ -205,11 +205,7 @@ def build_base_ranker(model_key: str, train_df: pd.DataFrame):
 
 def build_llm_ranker(train_df: pd.DataFrame):
     """
-    Build the experimental LLM-based ranker.
-
-    Depending on the configured mode, the LLM can be used as a standalone
-    ranker, combined with a base ranker, or used to rerank the top-k candidates
-    produced by another model.
+    Build the LLM-based ranker.
     """
     print(f"Loading LLM ranker: {LLM_MODEL_NAME}")
     print(f"LLM mode: {LLM_RANKER_MODE}")
@@ -242,10 +238,7 @@ def build_llm_ranker(train_df: pd.DataFrame):
 
 def build_modern_reranker(train_df: pd.DataFrame):
     """
-    Build the experimental BGE reranker pipeline.
-
-    The reranker can operate alone, as a weighted ensemble with a base ranker,
-    or as a top-k reranker over a previous ranking.
+    Build the BGE reranker pipeline.
     """
     cfg = get_modern_reranker_runtime_config(MODERN_RERANKER_MODEL_KEY)
     print(f"Loading modern reranker: {MODERN_RERANKER_MODEL_KEY} ({cfg['model_name']})")
@@ -283,7 +276,7 @@ def build_tail_reranker(train_df: pd.DataFrame):
 
     The base ranker first produces an initial ranking. Then an auxiliary ranker
     is applied to refine the lower part or full top-k ranking, depending on the
-    configured strategy.
+    configurd strategy.
     """
     print("Loading tail reranker...")
     base_ranker = build_base_ranker(TAIL_RERANKER_BASE_RANKER, train_df=train_df)
@@ -346,7 +339,7 @@ def score_dataframe_with_ranker(
     Returns
     -------
     tuple[list[str], list[np.ndarray]]
-        Task 1 ranking predictions and raw textual scores per row.
+        Task 1 ranking predictions and raw textual scores per row
     """
     preds: List[str] = []
     scores_cache: List[np.ndarray] = []
@@ -403,7 +396,7 @@ def main() -> None:
     # Visual model addition if enabled (task 2)
     if USE_VLM_FOR_TASK2:
         vlm_name = get_vlm_model_name()
-        print(f"Loading mode {VLM_BACKEND.upper()}: {vlm_name}...")
+        print(f"Loading {VLM_BACKEND.upper()} model: {vlm_name}...")
         vlm_model, vlm_processor, device = load_vlm()
         print(f"Device {VLM_BACKEND.upper()}: {device}")
 
@@ -447,7 +440,7 @@ def main() -> None:
     # LOCAL EVALUATION
     
     if "y_true" in test_df.columns:
-        print("Evaluando submission...")
+        print("Evaluating submission...")
         scores = score_submission(
             validation_csv=str(TEST_CSV),
             results_csv=str(OUTPUT_SUBMISSION),
@@ -455,16 +448,16 @@ def main() -> None:
             alpha=ALPHA,
         )
 
-        print("\nResultados:")
+        print("\Results:")
         for key, value in scores.items():
             print(f"{key}: {value}")
 
         with open(OUTPUT_METRICS, "w", encoding="utf-8") as f:
             json.dump(scores, f, indent=2, ensure_ascii=False)
 
-        print(f"Métricas guardadas en: {OUTPUT_METRICS}")
+        print(f"Saved metrics in: {OUTPUT_METRICS}")
     else:
-        print("No se encontró columna 'y_true'. Se omite la evaluación local.")
+        print("No 'y_true' column was found. Skipping local evaluation.")
 
 
 if __name__ == "__main__":

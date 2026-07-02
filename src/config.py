@@ -2,7 +2,7 @@
 Global configuration for the PoliticHeadlinES project.
 
 It covers paths, dataset selection, model selection, training and inference parameters,
-ensemble weights, reranking settings, multimodal and auxiliar functions for the
+ensemble weights, reranking settings, multimodal and auxiliary functions for the
 executions as well. 
 """
 
@@ -46,7 +46,7 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "modern_reranker"                    CHANGE
 # - "tail_reranker"
 # - "bert_rank10"                        CHANGE
-MODEL_NAME = "bert"
+MODEL_NAME = "bm25"
 
 # Kept for compatibility with older scripts. CHANGE
 ACTIVE_CROSS_ENCODER = MODEL_NAME
@@ -104,7 +104,7 @@ CROSS_ENCODER_CONFIGS = {
         "early_stopping_monitor": "task_1_pa_ndcg",
     },
     "bert_headtail": {                                                       # CHANGE
-        "model_name": BERT_MODEL_DIR,
+        "model_name": BERT_MODEL_DIR, # Initializaed from the previously fine-tuned BETO checkpoint.
         "model_dir": BERT_HEADTAIL_MODEL_DIR,
         "max_length": 512,
         "batch_size": 64,
@@ -118,7 +118,7 @@ CROSS_ENCODER_CONFIGS = {
         "early_stopping_min_delta": 0.0005,
         "early_stopping_monitor": "task_1_pa_ndcg",
         "use_head_tail": True,
-        "head_tokens": 384, # Proportion, not exaact number of tokens
+        "head_tokens": 384, # Approximate token budget for the beginning of the article.
         "tail_tokens": 125,
     },
     "bertin": {
@@ -201,7 +201,7 @@ BM25_QUERY_TERM_LIMIT = 512
 
 # MULTIMODAL SETTINGS
 
-USE_VLM_FOR_TASK2 = True 
+USE_VLM_FOR_TASK2 = False 
 TEXT_WEIGHT = 0.90
 IMAGE_WEIGHT = 0.10
 
@@ -385,7 +385,7 @@ def get_vlm_model_name() -> str:
         return CLIP_MODEL_NAME
     if backend == "siglip":
         return SIGLIP_MODEL_NAME
-    raise ValueError(f"VLM_BACKEND nnot supported: {VLM_BACKEND}")
+    raise ValueError(f"VLM_BACKEND not supported: {VLM_BACKEND}")
 
 
 

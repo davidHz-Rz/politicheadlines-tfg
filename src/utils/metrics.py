@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""
+Evaluation utilities for the PoliticHeadlinES project.
+
+This module provides helper functions to parse ranking strings, normalize
+predicted title tokens, compute nDCG-based scores, and evaluate complete
+submission files against local validation/test labels.
+"""
+
 import json
 import math
 from typing import Any, Dict, List, Optional
@@ -11,11 +19,15 @@ from config import ALPHA, N_COLS, NDCG_K
 
 def parse_rank_list(x: Any) -> List[str]:
     """
-    Acepta:
-      - "t1 t7 t3" (espacios)
-      - "t1,t7,t3" (comas)
-      - '["t1","t7"]' (json list)
-      - "t1" (top-1)
+    Parse a ranking representation into a list of title tokens.
+
+    Supported formats include:
+    - "t1 t7 t3"
+    - "t1,t7,t3"
+    - '["t1", "t7", "t3"]'
+    - "t1"
+
+    Empty or missing values return an empty list.
     """
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return []
@@ -32,7 +44,13 @@ def parse_rank_list(x: Any) -> List[str]:
         except Exception:
             pass
 
-    s = s.replace("\t", " ").replace("\n", " ").replace("\r", " ").replace(";", " ")
+    s = (
+        s.replace("\t", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .replace(";", " ")
+    )
+
     if "," in s:
         parts = [p.strip() for p in s.split(",")]
     else:
@@ -43,7 +61,14 @@ def parse_rank_list(x: Any) -> List[str]:
 
 def token_to_col(tok: Any) -> Optional[int]:
     """
-    't7' -> 7
+    Convert a title token into its numeric candidate index.
+
+    Examples
+    --------
+    "t7" -> 7
+    "d3" -> 3
+
+    Returns None when the token is missing, malformed or unsupported.
     """
     if tok is None or (isinstance(tok, float) and pd.isna(tok)):
         return None
@@ -64,27 +89,40 @@ def token_to_col(tok: Any) -> Optional[int]:
 
 def unique_valid_pred_cols(pred: List[str], n_cols: int = N_COLS) -> List[int]:
     """
-    Convierte tokens a columnas 1..n_cols, elimina duplicados preservando orden.
+    Convert ranking tokens to valid candidate indices.
+
+    Invalid tokens are ignored. Duplicated candidates are removed while
+    preserving the original prediction order.
     """
     out: List[int] = []
     seen = set()
 
     for tok in pred:
         n = token_to_col(tok)
+
         if n is None or not (1 <= n <= n_cols):
             continue
+
         if n in seen:
             continue
+
         seen.add(n)
         out.append(n)
 
     return out
 
 
-def ndcg_from_ideal(pred_cols: List[int], ideal_cols: List[int], k: int = NDCG_K) -> float:
+def ndcg_from_ideal(
+    pred_cols: List[int],
+    ideal_cols: List[int],
+    k: int = NDCG_K,
+) -> float:
     """
-    nDCG@k donde el ideal es un ranking explícito ideal_cols.
-    Ganancia lineal por posición ideal: top=10..1 (si len=10).
+    Compute nDCG@k using an explicit ideal ranking.
+
+    Gains are assigned according to the position in the ideal ranking. For a
+    list of ten candidates, the first ideal item receives the highest gain and
+    the last one receives the lowest gain.
     """
     if not ideal_cols:
         return 0.0
@@ -92,10 +130,12 @@ def ndcg_from_ideal(pred_cols: List[int], ideal_cols: List[int], k: int = NDCG_K
     ideal_rank: Dict[int, int] = {c: i for i, c in enumerate(ideal_cols)}
 
     def gain_for_col(c: int) -> float:
-        r = ideal_rank.get(c, None)
-        if r is None:
+        rank = ideal_rank.get(c)
+
+        if rank is None:
             return 0.0
-        return float(len(ideal_cols) - r)
+
+        return float(len(ideal_cols) - rank)
 
     dcg = 0.0
     for i, c in enumerate(pred_cols[:k], start=1):
@@ -118,9 +158,14 @@ def pa_ndcg(
     alpha: float = ALPHA,
 ) -> float:
     """
-    PA-nDCG:
-      - Si top-1 no coincide -> 0
-      - Si coincide -> alpha + (1-alpha)*aux_nDCG(resto)
+    Compute the PA-nDCG score for a single prediction.
+
+    The first predicted headline is treated as mandatory. If the predicted
+    top-1 headline does not match the reference top-1 headline, the score is 0
+
+    If the top-1 headline is correct, the score is computed as:
+
+        alpha + (1 - alpha) * nDCG(rest_of_ranking)
     """
     if not pred_tokens or not true_tokens:
         return 0.0
@@ -135,6 +180,7 @@ def pa_ndcg(
         return 0.0
 
     primary = ideal_cols[0]
+
     pred_rest = [c for c in pred_cols if c != primary]
     ideal_rest = [c for c in ideal_cols if c != primary]
 
@@ -150,6 +196,16 @@ def score_submission(
     k: int = NDCG_K,
     alpha: float = ALPHA,
 ) -> Dict[str, float]:
+    """
+    Evaluate a complete submission file against a labelled CSV file.
+
+    The validation file must contain columns "id" and "y_true".
+    The results file must contain columns "id", "task_1" and "task_2".
+
+    Predictions are matched to references by article id. Missing predictions
+    are scored as 0. The function returns Pa-nDCG for both tasks, their mean,
+    prediction coverage, and the metric parameters used.
+    """
     ref = pd.read_csv(validation_csv, dtype={"id": str})
     sub = pd.read_csv(results_csv, dtype={"id": str})
 
@@ -192,21 +248,28 @@ def score_submission(
         "alpha": alpha,
     }
 
+
 def score_task1_predictions_df(
     df_val: pd.DataFrame,
     task_1_preds: List[str],
     y_true_col: str = "y_true",
 ) -> Dict[str, float]:
-    """Evalúa predicciones de Task 1 sobre un dataframe con y_true.
+    """
+    Evaluate Task 1 predictions directly from a dataframe.
 
-    Devuelve PA-nDCG y accuracy top-1. Se mantiene el alias
-    ``top1_acc`` por compatibilidad con código anterior.
+    This helper is useful during experiments, when predictions are already
+    available in memory and there is no need to create a full submission file.
+
+    Returns PA-nDCG and top-1 accuracy. The alias "top1_acc" is kept for
+    compatibility with older experiment scripts.
     """
     if y_true_col not in df_val.columns:
-        raise ValueError(f"No se encontró la columna '{y_true_col}' para evaluar.")
+        raise ValueError(f"Column '{y_true_col}' was not found for evaluation.")
 
     if len(df_val) != len(task_1_preds):
-        raise ValueError("El número de predicciones no coincide con el número de filas del dataframe.")
+        raise ValueError(
+            "The number of predictions does not match the number of dataframe rows."
+        )
 
     scores: List[float] = []
     top1_hits = 0
@@ -214,6 +277,7 @@ def score_task1_predictions_df(
     for (_, row), pred in zip(df_val.iterrows(), task_1_preds):
         y_true = parse_rank_list(row[y_true_col])
         pred_tokens = parse_rank_list(pred)
+
         scores.append(pa_ndcg(pred_tokens, y_true, k=NDCG_K, alpha=ALPHA))
 
         if pred_tokens and y_true and pred_tokens[0] == y_true[0]:
