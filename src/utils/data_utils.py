@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from config import REQUIRED_COLUMNS, TITLE_COLS, TOKENS_ALL
+from utils.scoring import minmax_01  # Re-exported for backwards compatibility.
 
 
 def validate_columns(df: pd.DataFrame) -> None:
@@ -114,21 +115,3 @@ def find_image_path(images_dir: Path, image_hash: Any) -> Optional[Path]:
         return candidate
 
     return None
-
-
-def minmax_01(x: np.ndarray) -> np.ndarray:
-    """
-    Normalize an array to the [0, 1] range using min-max normalization.
-
-    If all values are equal, the function returns zeros to avoid division by
-    zero.
-    """
-    x = x.astype(float)
-
-    mn = float(np.min(x))
-    mx = float(np.max(x))
-
-    if mx - mn < 1e-12:
-        return np.zeros_like(x, dtype=float)
-
-    return (x - mn) / (mx - mn)

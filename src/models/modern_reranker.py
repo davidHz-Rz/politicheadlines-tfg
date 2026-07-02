@@ -1,28 +1,27 @@
 from __future__ import annotations
 
+"""
+Experimental BGE reranker utilities.
+
+This module wraps a pretrained sequence-classification reranker and exposes the
+same score_titles(article, titles) interface used by the rest of the project.
+It also provides a small pipeline for solo scoring, weighted ensembling and
+top-k reranking over a base ranker.
+"""
+
 import numpy as np
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-
-def _minmax_01(x: np.ndarray) -> np.ndarray:
-    x = np.asarray(x, dtype=float)
-    if x.size == 0:
-        return x
-
-    xmin = float(np.min(x))
-    xmax = float(np.max(x))
-
-    if abs(xmax - xmin) < 1e-12:
-        return np.zeros_like(x, dtype=float)
-
-    return (x - xmin) / (xmax - xmin)
+from utils.scoring import minmax_01, order_to_scores
 
 
 class ModernReranker:
     """
-    Reranker BGE con interfaz:
-        score_titles(article, titles) -> np.ndarray
+    Pretrained BGE reranker with the common score_titles interface.
+
+    The model receives article-title pairs and returns one relevance score for
+    each candidate title.
     """
 
     def __init__(
@@ -52,8 +51,13 @@ class ModernReranker:
         self.model.to(self.device)
         self.model.eval()
 
+
     @torch.no_grad()
     def score_titles(self, article: str, titles: list[str]) -> np.ndarray:
+        """
+        Score all candidate titles for a given article.
+        """
+
         if not titles:
             return np.array([], dtype=float)
 
@@ -87,21 +91,13 @@ class ModernReranker:
 
 class ModernRerankerPipeline:
     """
-    Modos:
+    Pipeline wrapper around ModernReranker.
 
-    solo:
-        BGE puntúa todos los títulos.
-
-    ensemble:
-        Combina scores del ranker base + BGE.
-
-    rerank:
-        El ranker base selecciona top-K.
-        BGE reordena solo ese top-K.
-
-    rerank_tail:
-        El ranker base fija el top-1.
-        BGE reordena posiciones 2..K.
+    Supported modes:
+    - solo: BGE scores all titles directly.
+    - ensemble: combine base-ranker scores with BGE scores.
+    - rerank: the base ranker selects the top-k candidates, then BGE reranks them.
+    - rerank_tail: keep the base top-1 fixed and rerank positions 2..k.
     """
 
     VALID_MODES = {"solo", "ensemble", "rerank", "rerank_tail"}
@@ -120,12 +116,12 @@ class ModernRerankerPipeline:
 
         if self.mode not in self.VALID_MODES:
             raise ValueError(
-                f"Modo modern_reranker no soportado: {self.mode}. "
-                f"Modos válidos: {sorted(self.VALID_MODES)}"
+                f"Unsupported modern_reranker mode: {self.mode}. "
+                f"Valid modes: {sorted(self.VALID_MODES)}"
             )
 
         if self.mode != "solo" and base_ranker is None:
-            raise ValueError(f"El modo '{self.mode}' requiere base_ranker.")
+            raise ValueError(f"Mode '{self.mode}' requires base_ranker.")
 
         self.reranker = reranker
         self.base_ranker = base_ranker
@@ -134,7 +130,12 @@ class ModernRerankerPipeline:
         self.reranker_weight = reranker_weight
         self.normalize_scores = normalize_scores
 
+
     def score_titles(self, article: str, titles: list[str]) -> np.ndarray:
+        """
+        Return final scores according to the selected reranking mode.
+        """
+
         n_titles = len(titles)
 
         if n_titles == 0:
@@ -155,8 +156,8 @@ class ModernRerankerPipeline:
             )
 
             if self.normalize_scores:
-                base_scores = _minmax_01(base_scores)
-                reranker_scores = _minmax_01(reranker_scores)
+                base_scores = minmax_01(base_scores)
+                reranker_scores = minmax_01(reranker_scores)
 
             return (
                 self.base_weight * base_scores
@@ -190,7 +191,7 @@ class ModernRerankerPipeline:
 
             return self._order_to_scores(final_order, n_titles)
 
-        raise RuntimeError(f"Modo no alcanzable: {self.mode}")
+        raise RuntimeError(f"Unreachable mode: {self.mode}")
 
     def _rerank_subset(
         self,
@@ -198,6 +199,10 @@ class ModernRerankerPipeline:
         titles: list[str],
         indices: list[int],
     ) -> list[int]:
+        """
+        Rerank a subset of candidate indices with the BGE reranker.
+        """
+
         if not indices:
             return []
 
@@ -209,9 +214,9 @@ class ModernRerankerPipeline:
 
     @staticmethod
     def _order_to_scores(order: list[int], n_titles: int) -> np.ndarray:
-        scores = np.zeros(n_titles, dtype=float)
-
-        for rank, idx in enumerate(order):
-            scores[idx] = float(n_titles - rank)
-
-        return scores
+        """
+        Convert a complete order of indices into descending pseudo-scores.
+        """
+        return order_to_scores(order, n_titles)
+    
+    

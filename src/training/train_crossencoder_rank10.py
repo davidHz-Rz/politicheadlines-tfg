@@ -1,5 +1,22 @@
 from __future__ import annotations
 
+"""
+Training entry point for the rank10 cross-encoder.
+
+This script trains a regression-based cross-encoder that uses the full ground
+truth ranking instead of only the top-1 headline. Each article-title pair is
+assigned a graded relevance value according to the candidate position in
+``y_true``.
+
+Usage examples
+--------------
+Train the default rank10 configuration:
+    python src/training/train_crossencoder_rank10.py
+
+Train a specific rank10 configuration:
+    python src/training/train_crossencoder_rank10.py beto_rank10
+"""
+
 import json
 import sys
 from pathlib import Path
@@ -23,15 +40,18 @@ from utils.reproducibility import set_seed  # noqa: E402
 
 
 def print_training_config(model_key: str, cfg: dict) -> None:
+    """
+    Print the resolved training parameters for the rank10 model.
+    """
     gradient_accumulation_steps = cfg.get("gradient_accumulation_steps", 1)
     effective_batch_size = cfg["batch_size"] * gradient_accumulation_steps
 
-    print("\nConfiguración de entrenamiento rank10")
+    print("\nRank10 training configuration")
     print("=" * 70)
     print(f"Seed:                       {SEED}")
-    print(f"Modelo activo:              {model_key}")
-    print(f"Modelo base/checkpoint:     {cfg['model_name']}")
-    print(f"Directorio de salida:       {cfg['model_dir']}")
+    print(f"Active model:               {model_key}")
+    print(f"Base model/checkpoint:      {cfg['model_name']}")
+    print(f"Output directory:           {cfg['model_dir']}")
     print(f"Max length:                 {cfg['max_length']}")
     print(f"Batch size:                 {cfg['batch_size']}")
     print(f"Gradient accumulation:      {gradient_accumulation_steps}")
@@ -48,6 +68,11 @@ def print_training_config(model_key: str, cfg: dict) -> None:
 
 
 def save_training_config(model_key: str, cfg: dict, output_dir: Path) -> None:
+    """
+    Save the rank10 training configuration next to the model checkpoint.
+    The JSON file records the paths, hyperparameters, objective name and seed
+    used during training.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     gradient_accumulation_steps = cfg.get("gradient_accumulation_steps", 1)
@@ -78,15 +103,21 @@ def save_training_config(model_key: str, cfg: dict, output_dir: Path) -> None:
     with config_path.open("w", encoding="utf-8") as f:
         json.dump(training_cfg, f, ensure_ascii=False, indent=4)
 
-    print(f"Configuración guardada en: {config_path}")
+    print(f"Training configuration saved to: {config_path}")
 
 
-def main(model_key: str = "bert_rank10") -> None:
+def main(model_key: str = "beto_rank10") -> None:
+    """
+    Train the selected rank10 cross-encoder configuration.
+
+    The model key is resolved from CROSS_ENCODER_RANK10_CONFIGS in config.py.
+    By default, the script trains the ``beto_rank10`` configuration.
+    """
     set_seed(SEED)
 
     cfg = get_cross_encoder_rank10_runtime_config(model_key)
 
-    print("Cargando datos...")
+    print("Loading data...")
     train_df = pd.read_csv(TRAIN_CSV)
     dev_df = pd.read_csv(VAL_CSV)
 
@@ -101,12 +132,12 @@ def main(model_key: str = "bert_rank10") -> None:
     print_training_config(model_key, cfg)
     save_training_config(model_key, cfg, Path(cfg["model_dir"]))
 
-    print("Construyendo ejemplos graduados de entrenamiento...")
+    print("Building graded rank10 training examples...")
     train_examples = build_rank10_examples(train_df)
     dev_examples = build_rank10_examples(dev_df) if "y_true" in dev_df.columns else None
 
-    print(f"Número de pares train: {len(train_examples)}")
-    print(f"Número de pares dev: {len(dev_examples) if dev_examples is not None else 0}")
+    print(f"Train pairs: {len(train_examples)}")
+    print(f"Dev pairs: {len(dev_examples) if dev_examples is not None else 0}")
 
     ranker_config = CrossEncoderRank10Config(
         model_name=str(cfg["model_name"]),
@@ -123,10 +154,10 @@ def main(model_key: str = "bert_rank10") -> None:
         early_stopping_monitor=cfg.get("early_stopping_monitor", "task_1_pa_ndcg"),
     )
 
-    print("Inicializando modelo rank10...")
+    print("Initializing rank10 model...")
     ranker = CrossEncoderRank10Ranker(ranker_config)
-    print(f"Dispositivo: {ranker.device}")
-    print("Entrenando modelo rank10...")
+    print(f"Device: {ranker.device}")
+    print("Training rank10 model...")
 
     ranker.fit(
         train_examples=train_examples,
@@ -135,9 +166,11 @@ def main(model_key: str = "bert_rank10") -> None:
         output_dir=cfg["model_dir"],
     )
 
-    print(f"Entrenamiento completado. Mejor checkpoint guardado en: {cfg['model_dir']}")
+    print(f"Training completed. Best checkpoint saved to: {cfg['model_dir']}")
 
 
 if __name__ == "__main__":
-    selected_model = sys.argv[1] if len(sys.argv) > 1 else "bert_rank10"
+    selected_model = sys.argv[1] if len(sys.argv) > 1 else "beto_rank10"
     main(selected_model)
+
+

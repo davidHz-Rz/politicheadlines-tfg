@@ -1,3 +1,12 @@
+"""
+Regression cross-encoder ranker trained with graded relevance labels.
+
+Unlike the binary pointwise cross-encoder, this model learns from the complete
+reference ranking. Each candidate headline receives a relevance value derived
+from its position in y_true, and inference ranks candidates by the predicted
+regression score.
+"""
+
 from __future__ import annotations
 
 import json
@@ -12,23 +21,19 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 
-from config import FORCE_CPU, TOKENS_ALL
 from utils.data_utils import get_source_text_task1, get_titles
 from utils.metrics import parse_rank_list, score_task1_predictions_df
+from utils.scoring import rank_tokens_from_scores
+from models.modeling_utils import (
+    enable_cuda_optimizations,
+    encode_article_title_pairs,
+    get_device,
+    get_tokenizer_kwargs,
+    move_batch_to_device,
+)
 
 
 Rank10Example = Tuple[str, str, float]
-
-
-def get_device() -> str:
-    if FORCE_CPU:
-        return "cpu"
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
-
-def _should_use_slow_tokenizer(model_name_or_path: str) -> bool:
-    name = str(model_name_or_path).lower()
-    return "deberta" in name
 
 
 def build_rank10_examples(
@@ -37,15 +42,11 @@ def build_rank10_examples(
     normalize: bool = True,
 ) -> List[Rank10Example]:
     """
-    Construye pares (article, title, relevance) usando el ranking completo.
+    Build (article, title, relevance) examples from the complete ranking.
 
-    Si y_true = "t3 t1 ...", entonces:
-      t3 -> 10
-      t1 -> 9
-      ...
-      último -> 1
-
-    Con normalize=True, las relevancias se escalan a [0, 1].
+    If y_true = "t3 t1 ...", the first token receives the highest relevance,
+    the second receives the next highest relevance, and so on. With
+    normalize=True, relevance values are scaled to the [0, 1] range.
     """
     examples: List[Rank10Example] = []
 
@@ -56,8 +57,8 @@ def build_rank10_examples(
 
         if len(y_true_tokens) != len(titles):
             raise ValueError(
-                f"Ranking y_true inválido: {row[y_true_col]!r}. "
-                f"Esperados {len(titles)} tokens."
+                f"Invalid y_true ranking: {row[y_true_col]!r}. "
+                f"Expected {len(titles)} tokens."
             )
 
         relevance_by_idx: dict[int, float] = {}
@@ -65,30 +66,30 @@ def build_rank10_examples(
 
         for pos, token in enumerate(y_true_tokens):
             if not isinstance(token, str) or not token.startswith("t"):
-                raise ValueError(f"Token y_true inválido: {token!r}")
+                raise ValueError(f"Invalid y_true token: {token!r}")
 
             try:
                 idx = int(token[1:]) - 1
             except ValueError as exc:
-                raise ValueError(f"Token y_true inválido: {token!r}") from exc
+                raise ValueError(f"Invalid y_true token: {token!r}") from exc
 
             if idx < 0 or idx >= len(titles):
                 raise ValueError(
-                    f"Índice fuera de rango en y_true: {token!r}. "
-                    f"Número de titulares: {len(titles)}"
+                    f"Out-of-range index in y_true: {token!r}. "
+                    f"Number of titles: {len(titles)}"
                 )
             if idx in relevance_by_idx:
-                raise ValueError(f"Token duplicado en y_true: {token!r}")
+                raise ValueError(f"Duplicated token in y_true: {token!r}")
 
             relevance = float(n - pos)
             if normalize:
-                # Primero = 1.0, último = 0.1 si n=10.
+                # First candidate = 1.0, last candidate = 0.1 when n=10.
                 relevance = relevance / float(n)
             relevance_by_idx[idx] = relevance
 
         missing = set(range(len(titles))) - set(relevance_by_idx)
         if missing:
-            raise ValueError(f"Faltan candidatos en y_true: {sorted(missing)}")
+            raise ValueError(f"Missing candidates in y_true: {sorted(missing)}")
 
         for idx, title in enumerate(titles):
             examples.append((article, title, relevance_by_idx[idx]))
@@ -97,6 +98,10 @@ def build_rank10_examples(
 
 
 class Rank10PairDataset(Dataset):
+    """
+    PyTorch dataset for graded article-title relevance examples.
+    """
+
     def __init__(self, examples: List[Rank10Example]):
         self.examples = examples
 
@@ -114,6 +119,10 @@ class Rank10PairDataset(Dataset):
 
 @dataclass
 class CrossEncoderRank10Config:
+    """
+    Default configuration for the graded-relevance rank10 cross-encoder.
+    """
+
     model_name: str
     max_length: int = 512
     batch_size: int = 4
@@ -130,25 +139,23 @@ class CrossEncoderRank10Config:
 
 class CrossEncoderRank10Ranker:
     """
-    Cross-encoder de regresión para aprender el ranking completo.
+    Regression cross-encoder for complete-ranking learning.
 
-    A diferencia del cross-encoder original, no usa label binaria top1/resto.
-    Predice una relevancia graduada para cada par (article, title).
+    Instead of using binary top-1/rest labels, this model predicts graded
+    relevance values for each (article, title) pair.
     """
 
     def __init__(self, config: CrossEncoderRank10Config):
+        """
+        Initialize tokenizer, regression head and device.
+        """
         self.config = config
         self.device = get_device()
         self.training_history: List[dict] = []
 
-        if self.device == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            torch.set_float32_matmul_precision("high")
+        enable_cuda_optimizations(self.device)
 
-        tokenizer_kwargs = {}
-        if _should_use_slow_tokenizer(config.model_name):
-            tokenizer_kwargs["use_fast"] = False
+        tokenizer_kwargs = get_tokenizer_kwargs(config.model_name)
 
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name, **tokenizer_kwargs)
         model_config = AutoConfig.from_pretrained(config.model_name)
@@ -164,23 +171,29 @@ class CrossEncoderRank10Ranker:
         )
         self.model = self.model.float().to(self.device)
 
+
     def _collate_fn(self, batch):
+        """
+        Tokenize a batch of article-title pairs for regression training.
+        """
         articles = [item["article"] for item in batch]
         titles = [item["title"] for item in batch]
         labels = torch.tensor([item["labels"] for item in batch], dtype=torch.float)
 
-        enc = self.tokenizer(
+        enc = encode_article_title_pairs(
+            self.tokenizer,
             articles,
             titles,
-            truncation=True,
             max_length=self.config.max_length,
-            padding=True,
-            return_tensors="pt",
         )
         enc["labels"] = labels
         return enc
 
+
     def _make_loader(self, examples: List[Rank10Example], shuffle: bool = False) -> DataLoader:
+        """
+        Create a DataLoader with GPU-friendly options when available.
+        """
         use_cuda_loader = self.device == "cuda"
         num_workers = 2 if use_cuda_loader else 0
         return DataLoader(
@@ -193,6 +206,7 @@ class CrossEncoderRank10Ranker:
             persistent_workers=(use_cuda_loader and num_workers > 0),
         )
 
+
     def fit(
         self,
         train_examples: List[Rank10Example],
@@ -200,6 +214,9 @@ class CrossEncoderRank10Ranker:
         val_df: pd.DataFrame | None = None,
         output_dir: str | Path | None = None,
     ) -> None:
+        """
+        Train the rank10 regression model and optionally save checkpoints.
+        """
         train_loader = self._make_loader(train_examples, shuffle=True)
 
         no_decay = ["bias", "LayerNorm.weight", "LayerNorm.bias", "layer_norm.weight", "layer_norm.bias"]
@@ -251,8 +268,8 @@ class CrossEncoderRank10Ranker:
         best_epoch = None
         epochs_without_improvement = 0
 
-        print(f"Dispositivo: {self.device}")
-        print(f"AMP activado: {use_amp}")
+        print(f"Device: {self.device}")
+        print(f"AMP enabled: {use_amp}")
         print("Model dtype:", next(self.model.parameters()).dtype)
         print(f"Gradient accumulation steps: {self.config.gradient_accumulation_steps}")
         print(f"Early stopping patience: {self.config.early_stopping_patience}")
@@ -267,7 +284,7 @@ class CrossEncoderRank10Ranker:
             stop_training = False
 
             for batch_idx, batch in enumerate(train_loader, start=1):
-                batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+                batch = move_batch_to_device(batch, self.device)
 
                 if use_amp:
                     with torch.amp.autocast(device_type="cuda", dtype=torch.float16, enabled=True):
@@ -279,7 +296,7 @@ class CrossEncoderRank10Ranker:
 
                 if not torch.isfinite(loss):
                     raise ValueError(
-                        f"Loss no finita en epoch {epoch + 1}, batch {batch_idx}: {loss.item()}"
+                        f"Non-finite loss at epoch {epoch + 1}, batch {batch_idx}: {loss.item()}"
                     )
 
                 total_loss += loss.item()
@@ -336,8 +353,8 @@ class CrossEncoderRank10Ranker:
                 current_score = metrics.get(monitor_name)
                 if current_score is None:
                     raise KeyError(
-                        f"Métrica de early stopping no encontrada: {monitor_name!r}. "
-                        f"Métricas disponibles: {sorted(metrics.keys())}"
+                        f"Early stopping metric not found: {monitor_name!r}. "
+                        f"Available metrics: {sorted(metrics.keys())}"
                     )
 
                 improvement = current_score - best_score
@@ -347,14 +364,14 @@ class CrossEncoderRank10Ranker:
                     epochs_without_improvement = 0
                     if save_root is not None:
                         self.save(str(save_root))
-                        print(f"Nuevo mejor checkpoint guardado en: {save_root}")
+                        print(f"New best checkpoint saved to: {save_root}")
                 else:
                     epochs_without_improvement += 1
                     print(
-                        f"Sin mejora suficiente en {monitor_name}: "
-                        f"actual={current_score:.6f}, mejor={best_score:.6f}, "
+                        f"No sufficient improvement in {monitor_name}: "
+                        f"current={current_score:.6f}, best={best_score:.6f}, "
                         f"delta={improvement:.6f}, "
-                        f"paciencia={epochs_without_improvement}/"
+                        f"patience={epochs_without_improvement}/"
                         f"{self.config.early_stopping_patience}"
                     )
 
@@ -370,9 +387,9 @@ class CrossEncoderRank10Ranker:
                 
             if stop_training:
                 print(
-                    f"Early stopping activado en epoch {epoch + 1}. "
-                    f"Mejor epoch: {best_epoch}, "
-                    f"mejor {self.config.early_stopping_monitor}: {best_score:.6f}"
+                    f"Early stopping triggered at epoch {epoch + 1}. "
+                    f"Best epoch: {best_epoch}, "
+                    f"best {self.config.early_stopping_monitor}: {best_score:.6f}"
                 )
                 break
 
@@ -382,7 +399,11 @@ class CrossEncoderRank10Ranker:
             self.save(str(last_dir))
             self._save_training_history(save_root, best_epoch, best_score)
 
+
     def evaluate_loss(self, examples: List[Rank10Example]) -> float:
+        """
+        Compute average regression loss over validation examples.
+        """
         loader = self._make_loader(examples, shuffle=False)
         self.model.eval()
         use_amp = self.config.use_amp and self.device == "cuda"
@@ -390,7 +411,7 @@ class CrossEncoderRank10Ranker:
         total_loss = 0.0
         with torch.no_grad():
             for batch in loader:
-                batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+                batch = move_batch_to_device(batch, self.device)
                 if use_amp:
                     with torch.amp.autocast(device_type="cuda", dtype=torch.float16, enabled=True):
                         outputs = self.model(**batch)
@@ -401,7 +422,11 @@ class CrossEncoderRank10Ranker:
         self.model.train()
         return total_loss / max(len(loader), 1)
 
+
     def score_titles(self, article: str, titles: List[str]) -> np.ndarray:
+        """
+        Return predicted relevance scores for all candidate headlines.
+        """
         if not titles:
             return np.array([], dtype=float)
 
@@ -412,15 +437,13 @@ class CrossEncoderRank10Ranker:
         with torch.no_grad():
             for start in range(0, len(titles), self.config.batch_size):
                 batch_titles = titles[start:start + self.config.batch_size]
-                enc = self.tokenizer(
+                enc = encode_article_title_pairs(
+                    self.tokenizer,
                     [article] * len(batch_titles),
                     batch_titles,
-                    truncation=True,
                     max_length=self.config.max_length,
-                    padding=True,
-                    return_tensors="pt",
                 )
-                enc = {k: v.to(self.device, non_blocking=True) for k, v in enc.items()}
+                enc = move_batch_to_device(enc, self.device)
 
                 if use_amp:
                     with torch.amp.autocast(device_type="cuda", dtype=torch.float16, enabled=True):
@@ -432,30 +455,48 @@ class CrossEncoderRank10Ranker:
 
         return np.asarray(all_scores, dtype=float)
 
+
     def rank_titles(self, article: str, titles: List[str]) -> List[str]:
-        scores = self.score_titles(article, titles)
-        order = np.argsort(-scores)
-        return [TOKENS_ALL[i] for i in order]
+        """
+        Return title tokens ordered by descending regression score.
+        """
+        return rank_tokens_from_scores(self.score_titles(article, titles))
+
 
     def predict_dataframe(self, df_pred: pd.DataFrame) -> List[str]:
+        """
+        Used for isolated testing outside the main run.py pipeline.
+        """
         preds = []
         for idx, (_, row) in enumerate(df_pred.iterrows(), start=1):
             article = get_source_text_task1(row)
             titles = get_titles(row)
             preds.append(" ".join(self.rank_titles(article, titles)))
             if idx % 10 == 0:
-                print(f"Predichas {idx}/{len(df_pred)} filas...")
+                print(f"Predicted {idx}/{len(df_pred)} rows...")
         return preds
 
+
     def evaluate_ranking_dataframe(self, df_val: pd.DataFrame) -> dict:
+        """
+        Evaluate ranking metrics directly on a labelled dataframe.
+        """
         preds = self.predict_dataframe(df_val)
         return score_task1_predictions_df(df_val, preds)
 
+
     def save(self, output_dir: str) -> None:
+        """
+        Save model and tokenizer in Hugging Face format.
+        """
         self.model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
 
+
     def _save_training_history(self, output_dir: Path, best_epoch: int | None, best_score: float) -> None:
+        """
+        Save training history as JSON and CSV files.
+        """
         history_payload = {
             "best_epoch": best_epoch,
             "best_task_1_pa_ndcg": None if best_score == float("-inf") else best_score,
@@ -472,19 +513,19 @@ class CrossEncoderRank10Ranker:
 
     @classmethod
     def load(cls, model_dir: str, config: CrossEncoderRank10Config):
+        """
+        Load a trained rank10 checkpoint from a local directory.
+        """
         instance = cls.__new__(cls)
         instance.config = config
         instance.device = get_device()
         instance.training_history = []
 
-        if instance.device == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            torch.set_float32_matmul_precision("high")
+        enable_cuda_optimizations(instance.device)
 
-        tokenizer_kwargs = {}
-        if _should_use_slow_tokenizer(model_dir) or _should_use_slow_tokenizer(config.model_name):
-            tokenizer_kwargs["use_fast"] = False
+        tokenizer_kwargs = get_tokenizer_kwargs(model_dir)
+        if not tokenizer_kwargs:
+            tokenizer_kwargs = get_tokenizer_kwargs(config.model_name)
 
         instance.tokenizer = AutoTokenizer.from_pretrained(model_dir, **tokenizer_kwargs)
         instance.model = AutoModelForSequenceClassification.from_pretrained(model_dir)

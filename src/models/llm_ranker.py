@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""
+LLM-based ranking utilities.
+
+This module adapts instruction-tuned causal language models to the same
+score_titles(article, titles) interface used by the rest of the ranking
+pipeline.
+"""
+
 import gc
 import json
 import re
@@ -17,12 +25,17 @@ try:
 except Exception:
     BitsAndBytesConfig = None
 
-from config import FORCE_CPU, TOKENS_ALL
-from utils.data_utils import get_source_text_task1, get_titles, minmax_01
+from config import FORCE_CPU
+from utils.data_utils import get_source_text_task1, get_titles
+from utils.scoring import minmax_01, rank_tokens_from_scores, order_to_scores
 
 
 @dataclass
 class LLMRankerConfig:
+    """
+    Default configuration values used to load and run an instruction-tuned LLM.
+    """
+
     model_name: str
     max_input_chars: int = 3500
     max_new_tokens: int = 512
@@ -34,12 +47,20 @@ class LLMRankerConfig:
 
 
 def get_device() -> str:
+    """
+    Return the execution device used for LLM inference.
+    """
+
     if FORCE_CPU:
         return "cpu"
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _resolve_torch_dtype(dtype_name: str):
+    """
+    Resolve a string dtype name into the value expected by Transformers.
+    """
+
     dtype_name = str(dtype_name).lower().strip()
     if dtype_name == "auto":
         return "auto"
@@ -49,11 +70,15 @@ def _resolve_torch_dtype(dtype_name: str):
         return torch.bfloat16
     if dtype_name in {"float32", "fp32"}:
         return torch.float32
-    raise ValueError(f"torch_dtype no soportado para LLM: {dtype_name}")
+    raise ValueError(f"Unsupported torch_dtype for LLM: {dtype_name}")
 
 
 def _repair_common_json_errors(text: str) -> str:
-    # Repara casos tipo {"id": 2, 0} -> {"id": 2, "score": 0}
+    """
+    Repair a small set of common malformed JSON outputs produced by LLMs.
+    """
+
+    # Repair cases such as {"id": 2, 0} -> {"id": 2, "score": 0}.
     text = re.sub(
         r'(\{"id"\s*:\s*\d+\s*,\s*)(-?\d+(?:\.\d+)?)\s*\}',
         r'\1"score": \2}',
@@ -63,6 +88,10 @@ def _repair_common_json_errors(text: str) -> str:
 
 
 def _extract_json_object(text: str) -> Optional[dict]:
+    """
+    Extract the first valid JSON object from a generated text.
+    """
+
     text = str(text or "").strip()
     text = _repair_common_json_errors(text)
 
@@ -90,6 +119,10 @@ def _extract_json_object(text: str) -> Optional[dict]:
 
 
 def _scores_from_payload(payload: dict, n_titles: int) -> Optional[np.ndarray]:
+    """
+    Convert a parsed JSON payload into one score per candidate title.
+    """
+
     if not isinstance(payload, dict):
         return None
 
@@ -97,7 +130,7 @@ def _scores_from_payload(payload: dict, n_titles: int) -> Optional[np.ndarray]:
     scores = np.full(n_titles, np.nan, dtype=float)
 
     if isinstance(raw_scores, list):
-        # Formato esperado: [{"id": 1, "score": 8.5}, ...]
+        # Expected format: [{"id": 1, "score": 8.5}, ...]
         for item in raw_scores:
             if not isinstance(item, dict):
                 continue
@@ -110,7 +143,7 @@ def _scores_from_payload(payload: dict, n_titles: int) -> Optional[np.ndarray]:
             if 0 <= idx < n_titles:
                 scores[idx] = value
 
-        # Formato alternativo: [8.5, 3.0, ...]
+        # Alternative format: [8.5, 3.0, ...]
         if np.isnan(scores).all() and len(raw_scores) == n_titles:
             try:
                 scores = np.asarray([float(x) for x in raw_scores], dtype=float)
@@ -120,10 +153,10 @@ def _scores_from_payload(payload: dict, n_titles: int) -> Optional[np.ndarray]:
     if np.isnan(scores).all():
         return None
 
-    # Parser parcial: si falta algún id, no tiramos toda la predicción.
+    # Partial parser: if an id is missing, keep the prediction and fill later.
     scores = np.nan_to_num(scores, nan=0.0)
 
-    # Clamp defensivo a rango esperado.
+    # Defensive clamp to the expected score range.
     scores = np.clip(scores, 0.0, 10.0)
 
     return scores
@@ -131,10 +164,9 @@ def _scores_from_payload(payload: dict, n_titles: int) -> Optional[np.ndarray]:
 
 class LLMRanker:
     """
-    Ranker textual genérico para modelos instruction-tuned tipo Qwen/Llama.
+    Text ranker for instruction-tuned models such as Qwen or Llama.
 
-    Implementa score_titles(article, titles) para ser intercambiable con los
-    cross-encoders en run.py y vlm_ranker.py.
+    The class implements score_titles(article, titles), same to most other models.
     """
 
     def __init__(self, config: LLMRankerConfig):
@@ -153,8 +185,9 @@ class LLMRanker:
         if self.device == "cuda" and config.load_in_4bit:
             if BitsAndBytesConfig is None:
                 raise ImportError(
-                    "LLM_LOAD_IN_4BIT=True requiere bitsandbytes/transformers con BitsAndBytesConfig. "
-                    "Instala bitsandbytes o pon LLM_LOAD_IN_4BIT=False."
+                    "LLM_LOAD_IN_4BIT=True requires bitsandbytes and a Transformers "
+                    "version with BitsAndBytesConfig. Install bitsandbytes or set "
+                    "LLM_LOAD_IN_4BIT=False."
                 )
 
             model_kwargs["quantization_config"] = BitsAndBytesConfig(
@@ -173,7 +206,14 @@ class LLMRanker:
 
         self.model.eval()
 
+
     def _build_messages(self, article: str, titles: List[str]) -> list[dict]:
+        """
+        Build chat messages for the LLM prompt. 
+        
+        Kept in spanish.
+        """
+
         article = str(article or "").strip()
 
         if self.config.max_input_chars and len(article) > self.config.max_input_chars:
@@ -237,8 +277,13 @@ class LLMRanker:
             {"role": "user", "content": user},
         ]
 
+
     @torch.inference_mode()
     def score_titles(self, article: str, titles: List[str]) -> np.ndarray:
+        """
+        Generate LLM relevance scores for the candidate titles.
+        """
+
         if not titles:
             return np.array([], dtype=float)
 
@@ -273,18 +318,27 @@ class LLMRanker:
         scores = _scores_from_payload(payload, len(titles)) if payload is not None else None
 
         if scores is None:
-            print("[WARN] No se pudo parsear salida LLM; usando ranking original.")
-            print("Salida LLM:", text[:500])
+            print("[WARN] Could not parse LLM output; using the original ranking.")
+            print("LLM output:", text[:500])
             return np.arange(len(titles), 0, -1, dtype=float)
 
         return scores.astype(float)
 
+
     def rank_titles(self, article: str, titles: List[str]) -> List[str]:
-        scores = self.score_titles(article, titles)
-        order = np.argsort(-scores)
-        return [TOKENS_ALL[i] for i in order]
+        """
+        Return title tokens sorted by descending LLM score.
+        """
+
+        return rank_tokens_from_scores(self.score_titles(article, titles))
+
+
 
     def predict_dataframe(self, df_pred: pd.DataFrame) -> List[str]:
+        """
+        Used for isolated testing: predict rankings for a full dataframe.
+        """
+
         preds = []
 
         for idx, (_, row) in enumerate(df_pred.iterrows(), start=1):
@@ -293,11 +347,16 @@ class LLMRanker:
             preds.append(" ".join(self.rank_titles(article, titles)))
 
             if idx % 10 == 0:
-                print(f"Predichas {idx}/{len(df_pred)} filas...")
+                print(f"Predicted {idx}/{len(df_pred)} rows...")
 
         return preds
 
+
     def unload(self) -> None:
+        """
+        Release model/tokenizer references and clear CUDA cache when possible.
+        """
+
         if hasattr(self, "model"):
             del self.model
         if hasattr(self, "tokenizer"):
@@ -309,8 +368,11 @@ class LLMRanker:
             torch.cuda.empty_cache()
 
 
+
 class LLMEnsembleRanker:
-    """Combina un ranker base con LLM mediante ensemble o reranking top-k."""
+    """
+    Combine a base ranker and an LLM through ensemble or top-k reranking.
+    """
 
     def __init__(
         self,
@@ -329,7 +391,7 @@ class LLMEnsembleRanker:
         self.rerank_top_k = int(rerank_top_k)
 
         if self.mode not in {"solo", "ensemble", "rerank"}:
-            raise ValueError(f"LLM_RANKER_MODE no soportado: {mode}")
+            raise ValueError(f"Unsupported LLM_RANKER_MODE: {mode}")
 
     def score_titles(self, article: str, titles: List[str]) -> np.ndarray:
         if self.mode == "solo" or self.base_ranker is None:
@@ -346,8 +408,8 @@ class LLMEnsembleRanker:
 
             return (w_base * minmax_01(base_scores)) + (w_llm * minmax_01(llm_scores))
 
-        # mode == "rerank":
-        # conserva candidatos fuera del top-k en orden base y reordena solo el top-k con LLM.
+        # mode == "rerank": keep candidates outside top-k in base order and
+        # rerank only the top-k candidates with the LLM.
         n = len(titles)
         k = max(1, min(self.rerank_top_k, n))
 
@@ -366,18 +428,20 @@ class LLMEnsembleRanker:
 
         final_order = top_order + tail_indices
 
-        final_scores = np.zeros(n, dtype=float)
-        for rank, idx in enumerate(final_order):
-            final_scores[idx] = n - rank
-
-        return final_scores
+        return order_to_scores(final_order, n)
 
     def rank_titles(self, article: str, titles: List[str]) -> List[str]:
-        scores = self.score_titles(article, titles)
-        order = np.argsort(-scores)
-        return [TOKENS_ALL[i] for i in order]
+        """
+        Return title tokens sorted by descending LLM score.
+        """
+
+        return rank_tokens_from_scores(self.score_titles(article, titles))
 
     def predict_dataframe(self, df_pred: pd.DataFrame) -> List[str]:
+        """
+        Used for isolated testing: predict rankings for a full dataframe.
+        """
+
         preds = []
 
         for idx, (_, row) in enumerate(df_pred.iterrows(), start=1):
@@ -386,6 +450,9 @@ class LLMEnsembleRanker:
             preds.append(" ".join(self.rank_titles(article, titles)))
 
             if idx % 10 == 0:
-                print(f"Predichas {idx}/{len(df_pred)} filas...")
+                print(f"Predicted {idx}/{len(df_pred)} rows...")
 
         return preds
+    
+    
+    

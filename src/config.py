@@ -37,22 +37,19 @@ IMAGES_DIR = DATASET_DIR / "images"
 # - "tfidf"
 # - "semantic"
 # - "bm25"
-# - "bert"                               CHANGE
-# - "bert_headtail"                      CHANGE
+# - "beto"
+# - "beto_headtail"
 # - "bertin"
 # - "mdeberta"
 # - "crossencoder_ensemble"
 # - "llm_ranker"
-# - "modern_reranker"                    CHANGE
+# - "modern_reranker"
 # - "tail_reranker"
-# - "bert_rank10"                        CHANGE
+# - "beto_rank10"
 MODEL_NAME = "bm25"
 
-# Kept for compatibility with older scripts. CHANGE
-ACTIVE_CROSS_ENCODER = MODEL_NAME
-
 # Prefix used to name output files
-RUN_NAME = MODEL_NAME # CAN BE REMOVED
+RUN_NAME = MODEL_NAME
 OUTPUT_SUBMISSION = OUTPUTS_DIR / f"{RUN_NAME}_results.csv"
 OUTPUT_METRICS = OUTPUTS_DIR / f"{RUN_NAME}_metrics.json"
 
@@ -73,11 +70,11 @@ FORCE_CPU = False # Forces the execution to be done by the CPU instead of GPU
 
 # FOLDERS FOR THE TRAINED MODELS
 
-BERT_MODEL_DIR = OUTPUTS_DIR / "bert_model"                         # CHANGE
-BERT_HEADTAIL_MODEL_DIR = OUTPUTS_DIR / "bert_headtail_model"       # CHANGE
+BETO_MODEL_DIR = OUTPUTS_DIR / "beto_model"
+BETO_HEADTAIL_MODEL_DIR = OUTPUTS_DIR / "beto_headtail_model"
 BERTIN_MODEL_DIR = OUTPUTS_DIR / "bertin_model"
 MDEBERTA_MODEL_DIR = OUTPUTS_DIR / "mdeberta_model"
-BERT_RANK10_MODEL_DIR = OUTPUTS_DIR / "bert_rank10_model"           # CHANGE
+BETO_RANK10_MODEL_DIR = OUTPUTS_DIR / "beto_rank10_model"
 
 
 # POINTWISE CROSSENCODER CONFIGURATIONS
@@ -88,9 +85,9 @@ BERT_RANK10_MODEL_DIR = OUTPUTS_DIR / "bert_rank10_model"           # CHANGE
 # from the beginning
 
 CROSS_ENCODER_CONFIGS = {
-    "bert": {                                                       # CHANGE
+    "beto": {
         "model_name": "dccuchile/bert-base-spanish-wwm-cased",
-        "model_dir": BERT_MODEL_DIR,
+        "model_dir": BETO_MODEL_DIR,
         "max_length": 512,
         "batch_size": 64,
         "gradient_accumulation_steps": 1,
@@ -103,9 +100,9 @@ CROSS_ENCODER_CONFIGS = {
         "early_stopping_min_delta": 0.0005,
         "early_stopping_monitor": "task_1_pa_ndcg",
     },
-    "bert_headtail": {                                                       # CHANGE
-        "model_name": BERT_MODEL_DIR, # Initializaed from the previously fine-tuned BETO checkpoint.
-        "model_dir": BERT_HEADTAIL_MODEL_DIR,
+    "beto_headtail": {
+        "model_name": BETO_MODEL_DIR, # Initialized from the previously fine-tuned BETO checkpoint.
+        "model_dir": BETO_HEADTAIL_MODEL_DIR,
         "max_length": 512,
         "batch_size": 64,
         "gradient_accumulation_steps": 1,
@@ -118,7 +115,7 @@ CROSS_ENCODER_CONFIGS = {
         "early_stopping_min_delta": 0.0005,
         "early_stopping_monitor": "task_1_pa_ndcg",
         "use_head_tail": True,
-        "head_tokens": 384, # Approximate token budget for the beginning of the article.
+        "head_tokens": 384, # Approximate token budget for the article.
         "tail_tokens": 125,
     },
     "bertin": {
@@ -160,9 +157,9 @@ CROSS_ENCODER_CONFIGS = {
 # like the binary trained models
 
 CROSS_ENCODER_RANK10_CONFIGS = {
-    "bert_rank10": {
-        "model_name": BERT_MODEL_DIR,
-        "model_dir": BERT_RANK10_MODEL_DIR,
+    "beto_rank10": {
+        "model_name": BETO_MODEL_DIR,
+        "model_dir": BETO_RANK10_MODEL_DIR,
         "max_length": 512,
         "batch_size": 32,
         "gradient_accumulation_steps": 1,
@@ -185,8 +182,8 @@ CROSS_ENCODER_RANK10_CONFIGS = {
 # those new values the new ranking is obtained
 
 CROSS_ENCODER_ENSEMBLE_MEMBERS = [
-    ("bert_headtail", 0.40),
-    ("bert", 0.45),
+    ("beto_headtail", 0.40),
+    ("beto", 0.45),
     ("mdeberta", 0.15)
 ]
 
@@ -201,7 +198,7 @@ BM25_QUERY_TERM_LIMIT = 512
 
 # MULTIMODAL SETTINGS
 
-USE_VLM_FOR_TASK2 = False 
+USE_VLM_FOR_TASK2 = True 
 TEXT_WEIGHT = 0.90
 IMAGE_WEIGHT = 0.10
 
@@ -213,9 +210,6 @@ VLM_BACKEND = "siglip"
 
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
 SIGLIP_MODEL_NAME = "google/siglip2-base-patch16-224"  # siglip-base-patch16-224, siglip2-base-patch16-224
-
-# Compatibility with older scripts. REMOVE WHEN POSSIBLE
-USE_CLIP_FOR_TASK2 = USE_VLM_FOR_TASK2
 
 
 # LLMs CONFIGURATION
@@ -234,7 +228,7 @@ LLM_RANKER_MODE = "solo"
 # Model selection for ensemble or rerank mode
 # Supported: 
 # - "crossencoder_ensemble"
-# - "bert"
+# - "beto"
 # - "bertin"
 # - "mdeberta"
 # - "bm25"
@@ -267,12 +261,12 @@ MODERN_RERANKER_CONFIGS = {
     },
 }
 
-# Modess (same as LLMs, but can be used as a tail reranker too):             REVIEW and delete unnecessary modes (at least tail reranking)
+# Modes (same as LLMs, but can be used as a tail reranker too):             REVIEW and delete unnecessary modes (at least tail reranking)
 # "solo", "ensemble", "rerank", "rerank_tail"
 MODERN_RERANKER_MODE = "solo"
 
 # Base ranker selection for ensemble/reranking mode
-# Supported models: crossencoder_ensemble, bert, bertin, mdeberta, bm25, tfidf, semantic
+# Supported models: crossencoder_ensemble, beto, bertin, mdeberta, bm25, tfidf, semantic
 MODERN_RERANKER_BASE_RANKER = "crossencoder_ensemble"
 
 
@@ -282,44 +276,11 @@ MODERN_RERANKER_BASE_WEIGHT = 0.90
 MODERN_RERANKER_WEIGHT = 0.10
 
 
-# TAIL RERANKING CONFIGUTARION
+# TAIL RERANKING CONFIGURATION
 
 TAIL_RERANKER_BASE_RANKER = "crossencoder_ensemble"
-TAIL_RERANKER_AUX_RANKER = "bert_rank10"  # bm25, tfidf, semantic, bge, bert_rank10
+TAIL_RERANKER_AUX_RANKER = "beto_rank10"  # bm25, tfidf, semantic, bge, beto_rank10
 TAIL_RERANKER_TOP_K = 10
-
-
-# BACKWARDS COMPATIBILITY (REMOVE WHEN POSSIBLE)
-
-BERT_MODEL_NAME = CROSS_ENCODER_CONFIGS["bert"]["model_name"]
-BERT_MAX_LENGTH = CROSS_ENCODER_CONFIGS["bert"]["max_length"]
-BERT_BATCH_SIZE = CROSS_ENCODER_CONFIGS["bert"]["batch_size"]
-BERT_GRADIENT_ACCUMULATION_STEPS = CROSS_ENCODER_CONFIGS["bert"]["gradient_accumulation_steps"]
-BERT_LEARNING_RATE = CROSS_ENCODER_CONFIGS["bert"]["learning_rate"]
-BERT_EPOCHS = CROSS_ENCODER_CONFIGS["bert"]["epochs"]
-BERT_WEIGHT_DECAY = CROSS_ENCODER_CONFIGS["bert"]["weight_decay"]
-BERT_WARMUP_RATIO = CROSS_ENCODER_CONFIGS["bert"]["warmup_ratio"]
-BERT_USE_AMP = CROSS_ENCODER_CONFIGS["bert"]["use_amp"]
-
-BERTIN_MODEL_NAME = CROSS_ENCODER_CONFIGS["bertin"]["model_name"]
-BERTIN_MAX_LENGTH = CROSS_ENCODER_CONFIGS["bertin"]["max_length"]
-BERTIN_BATCH_SIZE = CROSS_ENCODER_CONFIGS["bertin"]["batch_size"]
-BERTIN_GRADIENT_ACCUMULATION_STEPS = CROSS_ENCODER_CONFIGS["bertin"]["gradient_accumulation_steps"]
-BERTIN_LEARNING_RATE = CROSS_ENCODER_CONFIGS["bertin"]["learning_rate"]
-BERTIN_EPOCHS = CROSS_ENCODER_CONFIGS["bertin"]["epochs"]
-BERTIN_WEIGHT_DECAY = CROSS_ENCODER_CONFIGS["bertin"]["weight_decay"]
-BERTIN_WARMUP_RATIO = CROSS_ENCODER_CONFIGS["bertin"]["warmup_ratio"]
-BERTIN_USE_AMP = CROSS_ENCODER_CONFIGS["bertin"]["use_amp"]
-
-MDEBERTA_MODEL_NAME = CROSS_ENCODER_CONFIGS["mdeberta"]["model_name"]
-MDEBERTA_MAX_LENGTH = CROSS_ENCODER_CONFIGS["mdeberta"]["max_length"]
-MDEBERTA_BATCH_SIZE = CROSS_ENCODER_CONFIGS["mdeberta"]["batch_size"]
-MDEBERTA_GRADIENT_ACCUMULATION_STEPS = CROSS_ENCODER_CONFIGS["mdeberta"]["gradient_accumulation_steps"]
-MDEBERTA_LEARNING_RATE = CROSS_ENCODER_CONFIGS["mdeberta"]["learning_rate"]
-MDEBERTA_EPOCHS = CROSS_ENCODER_CONFIGS["mdeberta"]["epochs"]
-MDEBERTA_WEIGHT_DECAY = CROSS_ENCODER_CONFIGS["mdeberta"]["weight_decay"]
-MDEBERTA_WARMUP_RATIO = CROSS_ENCODER_CONFIGS["mdeberta"]["warmup_ratio"]
-MDEBERTA_USE_AMP = CROSS_ENCODER_CONFIGS["mdeberta"]["use_amp"]
 
 
 # HELPER FUNCTIONS
@@ -367,7 +328,7 @@ def get_modern_reranker_runtime_config(model_key: str) -> dict:
 
 def get_vlm_model_name() -> str:
     """
-    Resolve the Huggin Face model name associated with the selected VLM backend.
+    Resolve the Hugging Face model name associated with the selected VLM backend.
 
     Raises
     ------
@@ -399,7 +360,6 @@ def print_config() -> None:
     print("PROJECT_ROOT:", PROJECT_ROOT)
     print("ACTIVE_DATASET:", ACTIVE_DATASET)
     print("MODEL_NAME:", MODEL_NAME)
-    print("ACTIVE_CROSS_ENCODER:", ACTIVE_CROSS_ENCODER)
     print("TRAIN_CSV:", TRAIN_CSV)
     print("VAL_CSV:", VAL_CSV)
     print("TEST_CSV:", TEST_CSV)

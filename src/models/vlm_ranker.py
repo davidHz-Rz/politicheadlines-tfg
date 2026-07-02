@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+"""
+Vision-language ranking utilities for Task 2.
+
+This module loads CLIP/SigLIP-style models, scores image-title pairs and
+combines visual scores with cached textual scores. It is used for the
+multimodal experiments while preserving the same ranking-token output format
+as the textual pipeline.
+"""
+
 from pathlib import Path
 from typing import List, Sequence
 
@@ -18,10 +27,15 @@ from config import (
     VLM_BACKEND,
     get_vlm_model_name,
 )
-from utils.data_utils import find_image_path, get_titles, minmax_01
+from utils.data_utils import find_image_path, get_titles
+from utils.scoring import minmax_01, ranking_from_scores, rank_tokens_from_scores
 
 
 def get_device() -> str:
+    """
+    Return the device used for VLM inference.
+    """
+
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -29,6 +43,10 @@ def load_vlm(
     backend: str = VLM_BACKEND,
     model_name: str | None = None,
 ):
+    """
+    Load the configured CLIP or SigLIP vision-language model.
+    """
+
     backend = backend.lower().strip()
     device = get_device()
     resolved_model_name = model_name or get_vlm_model_name()
@@ -40,25 +58,26 @@ def load_vlm(
         model = AutoModel.from_pretrained(resolved_model_name).to(device)
         processor = AutoProcessor.from_pretrained(resolved_model_name)
     else:
-        raise ValueError(f"Backend VLM no soportado: {backend}")
+        raise ValueError(f"Unsupported VLM backend: {backend}")
 
     model.eval()
     return model, processor, device
 
 
 def load_clip(model_name: str = CLIP_MODEL_NAME):
+    """
+    Compatibility helper for loading CLIP.
+    """
+
     return load_vlm(backend="clip", model_name=model_name)
 
 
 def load_siglip(model_name: str = SIGLIP_MODEL_NAME):
+    """
+    Compatibility helper for loading SigLIP.
+    """
+
     return load_vlm(backend="siglip", model_name=model_name)
-
-
-def ranking_from_scores(scores: Sequence[float]) -> str:
-    """Convierte scores por título en ranking tokenizado t1 ... t10."""
-    scores = np.asarray(scores, dtype=float)
-    order = np.argsort(-scores)
-    return " ".join(TOKENS_ALL[i] for i in order)
 
 
 @torch.inference_mode()
@@ -70,6 +89,10 @@ def vlm_logits_image_vs_titles(
     titles: List[str],
     backend: str = VLM_BACKEND,
 ) -> np.ndarray:
+    """
+    Compute image-vs-title logits for the selected VLM backend.
+    """
+
     backend = backend.lower().strip()
     image = Image.open(image_path).convert("RGB")
 
@@ -83,10 +106,10 @@ def vlm_logits_image_vs_titles(
     if backend == "clip":
         processor_kwargs.update(padding=True, max_length=77)
     elif backend == "siglip":
-        # La documentación oficial recomienda padding=max_length para SigLIP.
+        # Official SigLIP examples use padding=max_length.
         processor_kwargs.update(padding="max_length")
     else:
-        raise ValueError(f"Backend VLM no soportado: {backend}")
+        raise ValueError(f"Unsupported VLM backend: {backend}")
 
     inputs = vlm_processor(**processor_kwargs).to(device)
     outputs = vlm_model(**inputs)
@@ -101,6 +124,10 @@ def clip_logits_image_vs_titles(
     image_path: Path,
     titles: List[str],
 ) -> np.ndarray:
+    """
+    Compute CLIP image-title logits for compatibility with older code.
+    """
+
     return vlm_logits_image_vs_titles(
         vlm_model=clip_model,
         vlm_processor=clip_processor,
@@ -119,6 +146,10 @@ def siglip_logits_image_vs_titles(
     image_path: Path,
     titles: List[str],
 ) -> np.ndarray:
+    """
+    Compute SigLIP image-title logits for compatibility with older code.
+    """
+
     return vlm_logits_image_vs_titles(
         vlm_model=siglip_model,
         vlm_processor=siglip_processor,
@@ -138,6 +169,10 @@ def vlm_rank_titles_for_row(
     titles: List[str],
     backend: str = VLM_BACKEND,
 ) -> List[str]:
+    """
+    Rank candidate titles using only VLM image-title similarity.
+    """
+
     logits = vlm_logits_image_vs_titles(
         vlm_model=vlm_model,
         vlm_processor=vlm_processor,
@@ -146,8 +181,7 @@ def vlm_rank_titles_for_row(
         titles=titles,
         backend=backend,
     )
-    order = np.argsort(-logits)
-    return [TOKENS_ALL[i] for i in order]
+    return rank_tokens_from_scores(logits)
 
 
 def predict_task2_vlm(
@@ -158,7 +192,9 @@ def predict_task2_vlm(
     device: str,
     backend: str = VLM_BACKEND,
 ) -> List[str]:
-    """Ranking únicamente visual. Se conserva por compatibilidad."""
+    """
+    Used for isolated testing: produce a visual-only Task 2 ranking.
+    """
     preds = []
     missing_images = 0
 
@@ -190,6 +226,7 @@ def predict_task2_vlm(
     return preds
 
 
+
 def predict_task2_clip(
     df_pred: pd.DataFrame,
     images_dir: Path,
@@ -197,6 +234,10 @@ def predict_task2_clip(
     clip_processor: CLIPProcessor,
     device: str,
 ) -> List[str]:
+    """
+    Compatibility helper for visual-only CLIP predictions.
+    """
+
     return predict_task2_vlm(
         df_pred=df_pred,
         images_dir=images_dir,
@@ -219,15 +260,15 @@ def predict_task2_vlm_plus_text_scores(
     w_img: float = IMAGE_WEIGHT,
 ) -> List[str]:
     """
-    Función genérica para Task 2.
+    Generic multimodal prediction function for Task 2.
 
-    Recibe los scores textuales ya calculados para Task 1, añade la señal
-    imagen-titulares del VLM y devuelve el ranking multimodal. Así evitamos
-    recalcular TF-IDF/BM25/Semantic/CrossEncoder/LLM para Task 2.
+    The function receives the textual scores already computed for Task 1,
+    adds image-title similarity scores from the VLM, and returns the final
+    multimodal ranking. This avoids recalculating the textual model for Task 2.
     """
     if len(text_scores_list) != len(df_pred):
         raise ValueError(
-            "text_scores_list debe tener una entrada por fila de df_pred: "
+            "text_scores_list must contain one entry per row in df_pred: "
             f"{len(text_scores_list)} != {len(df_pred)}"
         )
 
@@ -240,8 +281,8 @@ def predict_task2_vlm_plus_text_scores(
 
         if len(text_scores) != len(titles):
             raise ValueError(
-                f"Fila {row_idx}: número de scores textuales inválido "
-                f"({len(text_scores)} scores para {len(titles)} títulos)."
+                f"Row {row_idx}: invalid number of textual scores "
+                f"({len(text_scores)} scores for {len(titles)} titles)."
             )
 
         img_path = find_image_path(images_dir, row.get("image_hash", ""))
@@ -263,7 +304,7 @@ def predict_task2_vlm_plus_text_scores(
         preds.append(ranking_from_scores(final_scores))
 
         if (row_idx + 1) % 100 == 0:
-            print(f"Predichas Task 2 {row_idx + 1}/{len(df_pred)} filas...")
+            print(f"Predicted Task 2 {row_idx + 1}/{len(df_pred)} rows...")
 
     if missing_images:
         print(f"[WARN] Missing images for {missing_images} rows. Used text-only fallback.")
@@ -271,45 +312,45 @@ def predict_task2_vlm_plus_text_scores(
     return preds
 
 
-# Aliases de compatibilidad para código anterior. Internamente ya no recalculan texto;
-# se recomienda usar predict_task2_vlm_plus_text_scores desde run.py.
+# Backwards-compatibility aliases for older code. They no longer recalculate text;
+# use predict_task2_vlm_plus_text_scores with cached textual scores from run.py.
 def predict_task2_crossencoder_plus_vlm(*args, **kwargs):
     raise RuntimeError(
-        "predict_task2_crossencoder_plus_vlm está obsoleto. Usa "
-        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+        "predict_task2_crossencoder_plus_vlm is deprecated. Use "
+        "predict_task2_vlm_plus_text_scores with cached textual scores."
     )
 
 
 def predict_task2_vlm_plus_bm25(*args, **kwargs):
     raise RuntimeError(
-        "predict_task2_vlm_plus_bm25 está obsoleto. Usa "
-        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+        "predict_task2_vlm_plus_bm25 is deprecated. Use "
+        "predict_task2_vlm_plus_text_scores with cached textual scores."
     )
 
 
 def predict_task2_semantic_plus_vlm(*args, **kwargs):
     raise RuntimeError(
-        "predict_task2_semantic_plus_vlm está obsoleto. Usa "
-        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+        "predict_task2_semantic_plus_vlm is deprecated. Use "
+        "predict_task2_vlm_plus_text_scores with cached textual scores."
     )
 
 
 def predict_task2_vlm_plus_tfidf(*args, **kwargs):
     raise RuntimeError(
-        "predict_task2_vlm_plus_tfidf está obsoleto. Usa "
-        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+        "predict_task2_vlm_plus_tfidf is deprecated. Use "
+        "predict_task2_vlm_plus_text_scores with cached textual scores."
     )
 
 
 def predict_task2_crossencoder_plus_clip(*args, **kwargs):
     raise RuntimeError(
-        "predict_task2_crossencoder_plus_clip está obsoleto. Usa "
-        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+        "predict_task2_crossencoder_plus_clip is deprecated. Use "
+        "predict_task2_vlm_plus_text_scores with cached textual scores."
     )
 
 
 def predict_task2_semantic_plus_clip(*args, **kwargs):
     raise RuntimeError(
-        "predict_task2_semantic_plus_clip está obsoleto. Usa "
-        "predict_task2_vlm_plus_text_scores con scores textuales cacheados."
+        "predict_task2_semantic_plus_clip is deprecated. Use "
+        "predict_task2_vlm_plus_text_scores with cached textual scores."
     )

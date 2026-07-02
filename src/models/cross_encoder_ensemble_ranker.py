@@ -1,55 +1,64 @@
+"""
+Weighted ensemble for trained pointwise cross-encoder rankers.
+
+Each member model produces one relevance score per candidate headline. Scores
+are normalized per article and combined linearly with the configured weights.
+The resulting scores can then be sorted to obtain the final ranking.
+"""
+
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import List
+
 import numpy as np
 import pandas as pd
 
-from config import TOKENS_ALL, get_cross_encoder_runtime_config
+from config import get_cross_encoder_runtime_config
 from utils.data_utils import get_source_text_task1, get_titles
+from utils.scoring import minmax_01, rank_tokens_from_scores, validate_scores
 from models.cross_encoder_ranker import CrossEncoderConfig, CrossEncoderRanker
-
-
-def minmax_01(scores: Sequence[float]) -> np.ndarray:
-    scores = np.asarray(scores, dtype=float)
-
-    if scores.size == 0:
-        return scores
-    if not np.all(np.isfinite(scores)):
-        raise ValueError("El ensemble recibió scores no finitos.")
-
-    lo, hi = scores.min(), scores.max()
-    if hi - lo < 1e-12:
-        # Si un modelo asigna el mismo score a todos los candidatos, no aporta
-        # señal relativa para esa fila. Se devuelve un vector neutro.
-        return np.zeros_like(scores)
-
-    return (scores - lo) / (hi - lo)
 
 
 @dataclass
 class EnsembleMember:
+    """
+    Model identifier and normalized contribution weight for an ensemble member
+    """
+
     model_key: str
     weight: float
 
 
 class CrossEncoderEnsembleRanker:
+    """
+    Weighted soft-voting ensemble of trained cross-encoder rankers.
+
+    All members must follow the same interface as CrossEncoderRanker:
+    score_titles(article, titles) -> one score per candidate headline.
+    """
+
     def __init__(self, members: List[EnsembleMember]):
+        """
+        Load all configured cross-encoder members and normalize their weights.
+        """
         if not members:
-            raise ValueError("El ensemble debe contener al menos un modelo.")
+            raise ValueError("The ensemble must contain at least one model.")
 
         for member in members:
             if member.weight < 0:
                 raise ValueError(
-                    f"Peso negativo no permitido en el ensemble: "
+                    f"Negative ensemble weight is not allowed: "
                     f"{member.model_key}={member.weight}"
                 )
 
-        total = sum(m.weight for m in members)
+        total = sum(member.weight for member in members)
         if total <= 0:
-            raise ValueError("La suma de pesos del ensemble debe ser mayor que 0.")
+            raise ValueError("The sum of ensemble weights must be greater than 0.")
 
         self.members = [
-            EnsembleMember(m.model_key, m.weight / total)
-            for m in members
+            EnsembleMember(member.model_key, member.weight / total)
+            for member in members
         ]
 
         self.rankers = []
@@ -74,26 +83,39 @@ class CrossEncoderEnsembleRanker:
             ranker = CrossEncoderRanker.load(str(cfg["model_dir"]), ce_config)
             self.rankers.append((member, ranker))
 
+
     def score_titles(self, article: str, titles: List[str]) -> np.ndarray:
+        """
+        Return combined ensemble scores for the candidate headlines.
+
+        Scores from each member are min-max normalized per row and then summed
+        using the normalized ensemble weights.
+        """
         final_scores = np.zeros(len(titles), dtype=float)
 
         for member, ranker in self.rankers:
-            scores = np.asarray(ranker.score_titles(article, titles), dtype=float)
-            if len(scores) != len(titles):
-                raise ValueError(
-                    f"El modelo {member.model_key} devolvió {len(scores)} scores "
-                    f"para {len(titles)} títulos."
-                )
+            scores = validate_scores(
+                ranker.score_titles(article, titles),
+                expected_len=len(titles),
+                context=f"Model {member.model_key}",
+            )
+
             final_scores += member.weight * minmax_01(scores)
 
         return final_scores
 
-    def rank_titles(self, article: str, titles: List[str]):
-        scores = self.score_titles(article, titles)
-        order = np.argsort(-scores)
-        return [TOKENS_ALL[i] for i in order]
 
-    def predict_dataframe(self, df_pred: pd.DataFrame):
+    def rank_titles(self, article: str, titles: List[str]) -> List[str]:
+        """
+        Return title tokens ordered by descending ensemble score.
+        """
+        return rank_tokens_from_scores(self.score_titles(article, titles))
+
+
+    def predict_dataframe(self, df_pred: pd.DataFrame) -> List[str]:
+        """
+        Used for isolated testing.
+        """
         preds = []
 
         for idx, (_, row) in enumerate(df_pred.iterrows(), start=1):
@@ -102,6 +124,8 @@ class CrossEncoderEnsembleRanker:
             preds.append(" ".join(self.rank_titles(article, titles)))
 
             if idx % 10 == 0:
-                print(f"Predichas {idx}/{len(df_pred)} filas...")
+                print(f"Predicted {idx}/{len(df_pred)} rows...")
 
         return preds
+
+

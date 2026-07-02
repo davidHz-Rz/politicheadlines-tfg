@@ -1,3 +1,15 @@
+"""
+Batch evaluation script for PoliticHeadlinES TFG experiments.
+
+This script evaluates groups of rankers and experimental variants over the
+configured local test split. It can run individual baselines, cross-encoder
+ensembles, rerankers, LLM variants and VLM fusion experiments, saving both
+summary CSV files and per-model predictions under outputs/evaluation/.
+
+This is an experimentation script. It intentionally keeps several model
+builders and stages in one place to make large evaluation runs reproducible.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -57,14 +69,19 @@ from models.vlm_ranker import (  # noqa: E402
     load_vlm,
     predict_task2_vlm,
     predict_task2_vlm_plus_text_scores,
-    ranking_from_scores,
 )
-from run import (  # noqa: E402
+from models.factory import (  # noqa: E402
+    build_bge_ranker,
     build_crossencoder_rank10_ranker,
     build_crossencoder_ranker,
+    build_ensemble_from_spec,
+    build_named_ranker,
+    make_ensemble_name,
+    parse_weight_spec,
 )
-from utils.data_utils import get_source_text_task1, get_titles, validate_columns  # noqa: E402
+from utils.data_utils import validate_columns  # noqa: E402
 from utils.metrics import score_task1_predictions_df  # noqa: E402
+from utils.inference import score_dataframe_with_ranker as predict_with_ranker  # noqa: E402
 
 
 EVAL_DIR = OUTPUTS_DIR / "evaluation"
@@ -73,15 +90,15 @@ INDIVIDUAL_MODELS = [
     "tfidf",
     "bm25",
     "semantic",
-    "bert",
-    "bert_headtail",
+    "beto",
+    "beto_headtail",
     "bertin",
     "mdeberta",
-    "bert_rank10",
+    "beto_rank10",
     "bge",
 ]
 
-# Edita esta lista si quieres probar otros LLMs. Llama puede requerir HF_TOKEN y acceso aceptado.
+# Edit this list to test other LLMs. Llama may require HF_TOKEN and accepted access.
 LLM_MODELS = [
     "Qwen/Qwen2.5-7B-Instruct",
     "meta-llama/Llama-3.1-8B-Instruct",
@@ -134,6 +151,9 @@ class EvalResult:
 
 
 def clear_memory() -> None:
+    """
+    Run garbage collection and release cached CUDA memory when available.
+    """
     gc.collect()
     try:
         import torch
@@ -145,119 +165,26 @@ def clear_memory() -> None:
 
 
 def load_data(limit: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    print(f"Cargando train: {TRAIN_CSV}")
+    """
+    Load the configured train and test CSV files used for local evaluation.
+    """
+    print(f"Loading train: {TRAIN_CSV}")
     train_df = pd.read_csv(TRAIN_CSV)
-    print(f"Cargando test:  {TEST_CSV}")
+    print(f"Loading test:  {TEST_CSV}")
     test_df = pd.read_csv(TEST_CSV)
 
     validate_columns(train_df)
     validate_columns(test_df)
     if "y_true" not in test_df.columns:
-        raise ValueError("TEST_CSV debe contener y_true para evaluación local.")
+        raise ValueError("TEST_CSV must contain y_true for local evaluation.")
 
     if limit is not None:
         test_df = test_df.head(limit).copy()
-        print(f"[DEBUG] Limitando evaluación a {len(test_df)} filas.")
+        print(f"[DEBUG] Limiting evaluation to {len(test_df)} rows.")
 
     print(f"Train rows: {len(train_df)}")
     print(f"Test rows:  {len(test_df)}")
     return train_df, test_df
-
-
-def build_tfidf_ranker(train_df: pd.DataFrame) -> TfidfRanker:
-    ranker = TfidfRanker()
-    ranker.fit(build_tfidf_corpus(train_df))
-    return ranker
-
-
-def build_bm25_ranker(train_df: pd.DataFrame) -> BM25Ranker:
-    ranker = BM25Ranker(
-        k1=BM25_K1,
-        b=BM25_B,
-        query_term_limit=BM25_QUERY_TERM_LIMIT,
-    )
-    ranker.fit(build_bm25_corpus(train_df))
-    return ranker
-
-
-def build_bge_ranker() -> ModernReranker:
-    cfg = MODERN_RERANKER_CONFIGS["bge_reranker_v2_m3"]
-    return ModernReranker(
-        model_name=cfg["model_name"],
-        max_length=cfg["max_length"],
-        batch_size=cfg["batch_size"],
-        use_fp16=cfg.get("use_fp16", True),
-    )
-
-
-def build_named_ranker(name: str, train_df: pd.DataFrame):
-    name = name.lower().strip()
-    if name == "tfidf":
-        return build_tfidf_ranker(train_df)
-    if name == "bm25":
-        return build_bm25_ranker(train_df)
-    if name == "semantic":
-        return SemanticRanker()
-    if name in {"bert", "bert_headtail", "bertin", "mdeberta"}:
-        return build_crossencoder_ranker(name)
-    if name == "bert_rank10":
-        return build_crossencoder_rank10_ranker("bert_rank10")
-    if name == "bge":
-        return build_bge_ranker()
-    raise ValueError(f"Ranker no soportado: {name}")
-
-
-def parse_weight_spec(spec: str) -> list[EnsembleMember]:
-    """Convierte 'bert:0.7,bertin:0.3' en EnsembleMember(...)."""
-    members: list[EnsembleMember] = []
-    for part in spec.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if ":" not in part:
-            raise ValueError(f"Formato inválido en ensemble: {part!r}")
-        name, weight = part.split(":", 1)
-        members.append(EnsembleMember(name.strip(), float(weight)))
-    if not members:
-        raise ValueError("El ensemble no puede estar vacío.")
-    return members
-
-
-def make_ensemble_name(members: Sequence[EnsembleMember]) -> str:
-    return "+".join(f"{m.model_key}_{m.weight:g}" for m in members)
-
-
-def build_ensemble_from_spec(spec: str) -> CrossEncoderEnsembleRanker:
-    return CrossEncoderEnsembleRanker(parse_weight_spec(spec))
-
-
-def predict_with_ranker(
-    ranker,
-    df: pd.DataFrame,
-    progress_every: int = 50,
-) -> tuple[list[str], list[np.ndarray]]:
-    preds: list[str] = []
-    scores_cache: list[np.ndarray] = []
-
-    for idx, (_, row) in enumerate(df.iterrows(), start=1):
-        article = get_source_text_task1(row)
-        titles = get_titles(row)
-        scores = np.asarray(ranker.score_titles(article, titles), dtype=float)
-
-        if len(scores) != len(titles):
-            raise ValueError(
-                f"Fila {idx}: el ranker devolvió {len(scores)} scores para {len(titles)} titulares."
-            )
-        if not np.all(np.isfinite(scores)):
-            raise ValueError(f"Fila {idx}: scores no finitos.")
-
-        scores_cache.append(scores)
-        preds.append(ranking_from_scores(scores))
-
-        if progress_every and idx % progress_every == 0:
-            print(f"Predichas {idx}/{len(df)} filas...")
-
-    return preds, scores_cache
 
 
 def evaluate_predictions(
@@ -267,6 +194,9 @@ def evaluate_predictions(
     preds: list[str],
     notes: str = "",
 ) -> EvalResult:
+    """
+    Compute metrics for already generated predictions and wrap them in EvalResult.
+    """
     metrics = score_task1_predictions_df(df, preds)
     result = EvalResult(
         name=name,
@@ -292,7 +222,10 @@ def evaluate_ranker(
     predictions_dir: Path | None = None,
     notes: str = "",
 ) -> tuple[EvalResult, list[str], list[np.ndarray]]:
-    print(f"\n=== Evaluando {stage}: {name} ===")
+    """
+    Run prediction, evaluation and optional prediction export for one ranker.
+    """
+    print(f"\n=== Evaluating {stage}: {name} ===")
     preds, scores_cache = predict_with_ranker(ranker, test_df)
     result = evaluate_predictions(name, stage, test_df, preds, notes=notes)
 
@@ -307,6 +240,9 @@ def evaluate_ranker(
 
 
 def safe_name(name: str) -> str:
+    """
+    Convert a model name into a safe filename component.
+    """
     return (
         name.replace("/", "__")
         .replace("+", "_")
@@ -317,17 +253,23 @@ def safe_name(name: str) -> str:
 
 
 def save_results(stage: str, results: list[EvalResult]) -> Path:
+    """
+    Save a sorted CSV summary for one evaluation stage.
+    """
     EVAL_DIR.mkdir(parents=True, exist_ok=True)
     out_path = EVAL_DIR / f"{stage}.csv"
     pd.DataFrame([r.as_dict() for r in results]).sort_values(
         by="task_1_pa_ndcg",
         ascending=False,
     ).to_csv(out_path, index=False)
-    print(f"\nResultados guardados en: {out_path}")
+    print(f"\nResults saved to: {out_path}")
     return out_path
 
 
 def stage_individual(train_df: pd.DataFrame, test_df: pd.DataFrame, models: Sequence[str]) -> list[EvalResult]:
+    """
+    Evaluate individual baseline and neural rankers.
+    """
     results: list[EvalResult] = []
     predictions_dir = EVAL_DIR / "predictions" / "individual"
 
@@ -351,13 +293,13 @@ def stage_individual(train_df: pd.DataFrame, test_df: pd.DataFrame, models: Sequ
 def default_ensemble_specs(candidates: Sequence[str]) -> list[str]:
     specs: list[str] = []
 
-    # Parejas con varios pesos.
+    # Pairwise ensembles with multiple weight combinations
     for i, a in enumerate(candidates):
         for b in candidates[i + 1 :]:
             for wa, wb in PAIR_WEIGHTS:
                 specs.append(f"{a}:{wa},{b}:{wb}")
 
-    # Ternas principales.
+    # Main three-model combinations
     if len(candidates) >= 3:
         from itertools import combinations
 
@@ -367,15 +309,15 @@ def default_ensemble_specs(candidates: Sequence[str]) -> list[str]:
                     ",".join(f"{model}:{weight}" for model, weight in zip(combo, weights))
                 )
 
-    # Todos con pesos uniformes.
+    # Uniform ensemble with all candidates
     if len(candidates) >= 4:
         w = 1.0 / len(candidates)
         specs.append(",".join(f"{model}:{w}" for model in candidates))
 
-    # El ensemble original como referencia.
-    specs.append("bert:0.7,bertin:0.3")
+    # Original ensemble kept as a reference
+    specs.append("beto:0.7,bertin:0.3")
 
-    # Sin duplicados, preservando orden.
+    # Remove duplicates while preserving order
     return list(dict.fromkeys(specs))
 
 
@@ -385,12 +327,15 @@ def stage_ensembles(
     candidates: Sequence[str],
     specs: Sequence[str] | None = None,
 ) -> list[EvalResult]:
-    del train_df  # Los ensembles cargan checkpoints ya entrenados.
+    """
+    Evaluate weighted cross-encoder ensemble specifications.
+    """
+    del train_df  # Ensembles load already trained checkpoints.
     results: list[EvalResult] = []
     predictions_dir = EVAL_DIR / "predictions" / "ensembles"
 
     specs = list(specs) if specs else default_ensemble_specs(candidates)
-    print(f"Evaluando {len(specs)} ensembles...")
+    print(f"Evaluating {len(specs)} ensembles...")
 
     for spec in specs:
         ranker = build_ensemble_from_spec(spec)
@@ -417,6 +362,9 @@ def stage_rerankers(
     test_df: pd.DataFrame,
     base_ensemble: str,
 ) -> list[EvalResult]:
+    """
+    Evaluate tail and BGE reranking variants over a base ensemble.
+    """
     results: list[EvalResult] = []
     predictions_dir = EVAL_DIR / "predictions" / "rerankers"
 
@@ -425,8 +373,8 @@ def stage_rerankers(
     result, _, _ = evaluate_ranker(base_name, "rerankers", base_ranker, test_df, predictions_dir)
     results.append(result)
 
-    # Tail reranking con Rank10.
-    rank10 = build_crossencoder_rank10_ranker("bert_rank10")
+    # Tail reranking with Rank10.
+    rank10 = build_crossencoder_rank10_ranker("beto_rank10")
     tail_rank10 = TailReranker(base_ranker, rank10, top_k=10)
     result, _, _ = evaluate_ranker(
         name=f"{base_name}+tail_rank10",
@@ -439,7 +387,7 @@ def stage_rerankers(
     del rank10, tail_rank10
     clear_memory()
 
-    # Tail reranking con BGE.
+    # Tail reranking with BGE.
     bge = build_bge_ranker()
     tail_bge = TailReranker(base_ranker, bge, top_k=10)
     result, _, _ = evaluate_ranker(
@@ -451,7 +399,7 @@ def stage_rerankers(
     )
     results.append(result)
 
-    # BGE como ensemble y rerank_tail sobre la base textual.
+    # BGE as ensemble/reranker over the textual base.
     for mode in ["ensemble", "rerank", "rerank_tail"]:
         pipe = ModernRerankerPipeline(
             reranker=bge,
@@ -475,7 +423,7 @@ def stage_rerankers(
     del bge, base_ranker
     clear_memory()
 
-    # Tail reranking con baselines ligeros.
+    # Tail reranking with lightweight baselines
     for aux_name in ["bm25", "semantic"]:
         base_ranker = build_ensemble_from_spec(base_ensemble)
         aux_ranker = build_named_ranker(aux_name, train_df)
@@ -501,8 +449,11 @@ def stage_llm(
     llm_models: Sequence[str],
     mode: str = "solo",
     base_model: str = "crossencoder_ensemble",
-    base_ensemble: str = "bert:0.7,bertin:0.3",
+    base_ensemble: str = "beto:0.7,bertin:0.3",
 ) -> list[EvalResult]:
+    """
+    Evaluate LLM rankers in solo, ensemble or rerank mode.
+    """
     results: list[EvalResult] = []
     predictions_dir = EVAL_DIR / "predictions" / "llm"
     mode = mode.lower().strip()
@@ -554,34 +505,73 @@ def stage_llm(
     return results
 
 
+def build_vlm_text_ranker(base_ensemble: str, vlm_text_base: str):
+    """
+    Build the textual base that will be fused with visual scores.
+
+    - ensemble: use the specified textual ensemble directly.
+    - tail_rank10: apply TailReranker over that ensemble using beto_rank10.
+
+    TailReranker returns ordinal scores consistent with its final ranking, so
+    they can be reused as text_scores_list for VLM fusion.
+    """
+    vlm_text_base = vlm_text_base.lower().strip()
+    base_ranker = build_ensemble_from_spec(base_ensemble)
+
+    if vlm_text_base == "ensemble":
+        name = f"text_base_ensemble({base_ensemble})"
+        notes = f"vlm_text_base=ensemble; base={base_ensemble}"
+        return base_ranker, name, notes
+
+    if vlm_text_base == "tail_rank10":
+        rank10 = build_crossencoder_rank10_ranker("beto_rank10")
+        tail_rank10 = TailReranker(base_ranker, rank10, top_k=10)
+        name = f"text_base_tail_rank10({base_ensemble})"
+        notes = f"vlm_text_base=tail_rank10; base={base_ensemble}; tail=beto_rank10; top_k=10"
+        return tail_rank10, name, notes
+
+    raise ValueError(
+        f"Unsupported vlm_text_base: {vlm_text_base!r}. "
+        "Use 'ensemble' or 'tail_rank10'."
+    )
+
+
 def stage_vlm(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     base_ensemble: str,
     images_dir: Path,
+    vlm_text_base: str = "ensemble",
 ) -> list[EvalResult]:
+    """
+    Evaluate image-only VLMs and text-image fusion variants.
+    """
     del train_df
     results: list[EvalResult] = []
     predictions_dir = EVAL_DIR / "predictions" / "vlm"
 
     if not images_dir.exists():
-        print(f"[WARN] No existe images_dir: {images_dir}. La evaluación VLM usará fallback si no encuentra imágenes.")
+        print(f"[WARN] images_dir does not exist: {images_dir}. VLM evaluation will use fallbacks when images are missing.")
 
-    base_ranker = build_ensemble_from_spec(base_ensemble)
+    text_ranker, text_base_name, text_base_notes = build_vlm_text_ranker(
+        base_ensemble=base_ensemble,
+        vlm_text_base=vlm_text_base,
+    )
     base_result, _, base_scores = evaluate_ranker(
-        name=f"text_base({base_ensemble})",
+        name=text_base_name,
         stage="vlm",
-        ranker=base_ranker,
+        ranker=text_ranker,
         test_df=test_df,
         predictions_dir=predictions_dir,
+        notes=text_base_notes,
     )
     results.append(base_result)
 
     for backend, model_name in VLM_MODELS:
-        print(f"\n=== Cargando VLM {backend}: {model_name} ===")
+        print(f"\n=== Loading VLM {backend}: {model_name} ===")
         vlm_model, vlm_processor, device = load_vlm(backend=backend, model_name=model_name)
 
-        # VLM solo.
+        # Image-only VLM.
         solo_preds = predict_task2_vlm(
             df_pred=test_df,
             images_dir=images_dir,
@@ -599,7 +589,7 @@ def stage_vlm(
         )
         results.append(result)
 
-        # Fusión con el mejor textual.
+        # Fusion with the selected textual base.
         for w_text, w_img in [(0.98, 0.02), (0.95, 0.05), (0.90, 0.10), (0.80, 0.20)]:
             fused_preds = predict_task2_vlm_plus_text_scores(
                 df_pred=test_df,
@@ -613,81 +603,100 @@ def stage_vlm(
                 w_img=w_img,
             )
             result = evaluate_predictions(
-                name=f"text_vlm_{backend}_{model_name}_{w_text:g}_{w_img:g}",
+                name=f"text_{vlm_text_base}_vlm_{backend}_{model_name}_{w_text:g}_{w_img:g}",
                 stage="vlm",
                 df=test_df,
                 preds=fused_preds,
-                notes=f"base={base_ensemble}; w_text={w_text}; w_img={w_img}",
+                notes=(
+                    f"vlm_text_base={vlm_text_base}; base={base_ensemble}; "
+                    f"w_text={w_text}; w_img={w_img}"
+                ),
             )
             results.append(result)
 
         del vlm_model, vlm_processor
         clear_memory()
 
-    del base_ranker
+    del text_ranker
     clear_memory()
     save_results("vlm", results)
     return results
 
 
 def parse_list_arg(value: str | None, default: Sequence[str]) -> list[str]:
+    """
+    Parse a comma-separated command-line list with a default fallback.
+    """
     if value is None or not value.strip():
         return list(default)
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def main() -> None:
+    """
+    Parse command-line arguments and run the requested evaluation stage.
+    """
     parser = argparse.ArgumentParser(
-        description="Evaluación masiva de modelos para los experimentos del TFG.",
+        description="Batch evaluation of PoliticHeadlinES TFG experiments.",
     )
     parser.add_argument(
         "--stage",
         choices=["individual", "ensembles", "rerankers", "llm", "vlm", "all_text"],
         required=True,
-        help="Fase de evaluación a ejecutar.",
+        help="Evaluation stage to run.",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Número máximo de filas de test para pruebas rápidas.")
+    parser.add_argument("--limit", type=int, default=None, help="Maximum number of test rows for quick checks.")
     parser.add_argument(
         "--models",
         type=str,
         default=None,
-        help="Lista separada por comas para individual. Ej: bert,bertin,bge",
+        help="Comma-separated list for the individual stage. Example: beto,bertin,bge",
     )
     parser.add_argument(
         "--ensemble-candidates",
         type=str,
-        default="bert,bertin,mdeberta,bert_headtail",
-        help="Modelos candidatos para grid de ensembles.",
+        default="beto,bertin,mdeberta,beto_headtail",
+        help="Candidate models for the ensemble grid.",
     )
     parser.add_argument(
         "--ensemble-specs",
         type=str,
         default=None,
-        help="Lista de ensembles separada por ';'. Ej: 'bert:0.7,bertin:0.3;bert:0.5,mdeberta:0.5'",
+        help="Semicolon-separated ensemble specs. Example: 'beto:0.7,bertin:0.3;beto:0.5,mdeberta:0.5'",
     )
     parser.add_argument(
         "--base-ensemble",
         type=str,
-        default="bert:0.7,bertin:0.3",
-        help="Ensemble base para rerankers/VLM/LLM rerank.",
+        default="beto:0.7,bertin:0.3",
+        help="Base ensemble for rerankers, VLM and LLM rerank mode.",
     )
     parser.add_argument(
         "--llm-models",
         type=str,
         default=None,
-        help="LLMs separados por coma. Por defecto: Qwen2.5-7B y Llama-3.1-8B.",
+        help="Comma-separated LLMs. Defaults to Qwen2.5-7B and Llama-3.1-8B.",
     )
     parser.add_argument(
         "--llm-mode",
         choices=["solo", "ensemble", "rerank"],
         default="solo",
-        help="Modo de evaluación de LLM.",
+        help="LLM evaluation mode.",
     )
     parser.add_argument(
         "--images-dir",
         type=Path,
         default=IMAGES_DIR,
-        help="Directorio de imágenes para VLM.",
+        help="Image directory for VLM evaluation.",
+    )
+    parser.add_argument(
+        "--vlm-text-base",
+        choices=["ensemble", "tail_rank10"],
+        default="ensemble",
+        help=(
+            "Textual base to fuse with the VLM. "
+            "'ensemble' uses the ensemble provided with --base-ensemble; "
+            "'tail_rank10' applies TailReranker with beto_rank10 after that ensemble."
+        ),
     )
     args = parser.parse_args()
 
@@ -722,7 +731,13 @@ def main() -> None:
         return
 
     if args.stage == "vlm":
-        stage_vlm(train_df, test_df, base_ensemble=args.base_ensemble, images_dir=args.images_dir)
+        stage_vlm(
+            train_df,
+            test_df,
+            base_ensemble=args.base_ensemble,
+            images_dir=args.images_dir,
+            vlm_text_base=args.vlm_text_base,
+        )
         return
 
     if args.stage == "all_text":
@@ -731,10 +746,10 @@ def main() -> None:
         stage_individual(train_df, test_df, models)
         stage_ensembles(train_df, test_df, candidates=candidates)
         stage_rerankers(train_df, test_df, base_ensemble=args.base_ensemble)
-        print("\nall_text terminado. LLM y VLM se ejecutan aparte con --stage llm / --stage vlm.")
+        print("\nall_text finished. LLM and VLM are run separately with --stage llm / --stage vlm.")
         return
 
-    raise RuntimeError(f"Stage no alcanzable: {args.stage}")
+    raise RuntimeError(f"Unreachable stage: {args.stage}")
 
 
 if __name__ == "__main__":

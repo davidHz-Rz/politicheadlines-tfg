@@ -94,8 +94,10 @@ def validate_submission(submission: pd.DataFrame) -> None:
 
 def save_submission(submission: pd.DataFrame, output_path: Path) -> None:
     """
-    Save a submission dataframe to CSV.
+    Save a submission dataframe to CSV
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     submission.to_csv(output_path, index=False)
     print(f"Submission saved to: {output_path}")
+
+
